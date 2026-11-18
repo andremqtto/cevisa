@@ -17,11 +17,25 @@ App de controle de alunos e financeiro da academia. Banco de dados no **Supabase
    select id, 'Nome do gestor' from auth.users where email = 'gestor@exemplo.com';
    ```
    Para dar acesso a outros gestores, repita os dois passos.
-3. Recomendado: em **Authentication → Sign In / Providers**, desative **Allow new users to sign up**. Mesmo que alguém criasse conta, sem estar em `gestores` não consegue ver nem alterar nada, mas não há motivo para deixar aberto.
+3. Em **Authentication → Sign In / Providers → Email**, deixe **Allow new users to sign up** e **Confirm email** **ligados**. Os alunos criam a própria senha pelo botão *Primeiro acesso*.
+   **Importante:** não desligue o *Confirm email*. É ele que garante que só o dono do e-mail cadastrado na ficha consegue ver os dados daquele aluno.
+4. Em **Authentication → URL Configuration**, configure para onde o link de confirmação leva o aluno:
+   - **Enquanto testa no seu computador:** deixe **Site URL** = `http://localhost:3000` e, em **Redirect URLs**, adicione `http://localhost:3000` e o endereço da rede Wi-Fi usado no celular (ex.: `http://192.168.1.105:3000`).
+   - **Depois de publicar (Vercel):** troque **Site URL** pelo endereço publicado (ex.: `https://cevisa.vercel.app`) e adicione esse endereço também em **Redirect URLs**.
+   - Se o link abrir uma página com erro, o e-mail normalmente já foi confirmado assim mesmo: basta voltar ao app e entrar com e-mail e senha.
+
+### Acesso dos alunos
+1. Na ficha do aluno, preencha o **e-mail**.
+2. O aluno abre o app, toca em **Entrar → Primeiro acesso**, informa esse e-mail e cria uma senha.
+3. Ele recebe um e-mail de confirmação; depois de tocar no link, já consegue entrar.
+4. Se um responsável cuida de vários alunos (ex.: dois filhos), use o mesmo e-mail nas fichas: o painel mostra todos.
+5. A ficha mostra se o aluno já tem **acesso ao app**. Se você trocar o e-mail da ficha, o acesso antigo deixa de valer.
 
 ### 3. Conectar o app
 Em **Project Settings → API**, copie a **Project URL** e a chave **anon public** para `js/config.js`.
 Nunca use a chave `service_role` no app.
+
+No mesmo arquivo, preencha `WHATSAPP_NUMERO` (com DDI e DDD, só números, ex.: `5511912345678`). Ele é usado no balão do WhatsApp da tela inicial e no botão *Falar com o gestor* do painel do aluno.
 
 ### 4. Abrir
 O app usa módulos JavaScript, então precisa de um servidor local (não funciona abrindo o `index.html` direto):
@@ -33,6 +47,12 @@ Para publicar, envie a pasta inteira para qualquer hospedagem estática (Netlify
 ## Como o app funciona
 
 **Tela inicial (pública):** aulas com descrição, foto e preços mensal/semestral/anual. Visitantes **não** veem número de vagas. O botão **Entrar** abre o login em uma janela flutuante. Logado como gestor, os cartões ganham **Editar**, **Ver turma** e **Nova aula** (nome, descrição, preços, vagas, foto, ordem, ocultar/exibir).
+
+**Horários:** cada aula tem um campo de horários (um por linha), editado pelo gestor em **Editar**. Aparecem na tela inicial e no painel do aluno.
+
+**Painel do aluno:** depois do login, o aluno vê as aulas contratadas com horários, o valor de cada plano, o **total a pagar** (mensalidades que vencem nos próximos 30 dias ou já vencidas) e a data de vencimento. Tem os botões **Falar com o gestor** (WhatsApp) e **Já paguei**: este avisa o gestor, que recebe na hora um **banner verde** no app; tocando nele, abre a ficha do aluno. O aviso some quando o gestor registra o pagamento. O aluno não tem nenhum privilégio de gestor: só enxerga os próprios dados.
+
+**WhatsApp:** visitantes (antes do login) veem um balão fixo no canto da tela que abre uma conversa no WhatsApp.
 
 **Alunos:** busca e filtros (ativos, desativados, plano vencido, lista de espera). Clicando no aluno abre a ficha: dados pessoais, aulas e planos (início, pago até, meses trancados), histórico de pagamentos, ativar/desativar, inscrever em aula.
 

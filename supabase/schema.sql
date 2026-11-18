@@ -110,6 +110,45 @@ create table if not exists public.notificacoes (
 create index if not exists notificacoes_lida_idx on public.notificacoes (lida, created_at desc);
 
 -- ---------------------------------------------------------------------
+-- Atualizações (seguras para bancos já existentes)
+-- ---------------------------------------------------------------------
+
+-- Horários de cada aula (texto livre, um horário por linha).
+alter table public.aulas add column if not exists horarios text;
+
+-- Acesso de alunos ao app: o usuário do Supabase Auth fica ligado ao cadastro
+-- de aluno com o mesmo e-mail (confirmado). Um responsável pode ter vários alunos.
+alter table public.alunos add column if not exists user_id uuid references auth.users(id) on delete set null;
+create index if not exists alunos_user_idx  on public.alunos (user_id);
+create index if not exists alunos_email_idx on public.alunos (lower(email));
+
+-- Novo tipo de notificação: aluno avisou que pagou.
+alter table public.notificacoes drop constraint if exists notificacoes_tipo_check;
+alter table public.notificacoes add constraint notificacoes_tipo_check
+  check (tipo in ('vence_em_breve','vencido','vaga_liberada','pagamento_informado'));
+
+-- Se o gestor trocar o e-mail do aluno, o acesso antigo deixa de valer.
+create or replace function public._tg_alunos_email()
+returns trigger language plpgsql as $$
+begin
+  if new.email is distinct from old.email then new.user_id := null; end if;
+  return new;
+end $$;
+drop trigger if exists alunos_email_mudou on public.alunos;
+create trigger alunos_email_mudou before update of email on public.alunos
+  for each row execute function public._tg_alunos_email();
+
+-- Notificações em tempo real para o gestor (banner de pagamento informado).
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
+     and not exists (select 1 from pg_publication_tables
+                      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'notificacoes') then
+    alter publication supabase_realtime add table public.notificacoes;
+  end if;
+end $$;
+
+-- ---------------------------------------------------------------------
 -- Segurança (RLS)
 -- ---------------------------------------------------------------------
 
@@ -146,7 +185,7 @@ create policy notif_gestor    on public.notificacoes for all to authenticated us
 
 -- Visitantes veem as aulas SEM o número de vagas, apenas as ativas.
 create or replace view public.aulas_publicas as
-  select id, nome, descricao, foto_url, preco_mensal, preco_semestral, preco_anual, ordem
+  select id, nome, descricao, foto_url, preco_mensal, preco_semestral, preco_anual, ordem, horarios
   from public.aulas
   where ativa
   order by ordem, nome;
@@ -343,6 +382,8 @@ begin
    where id = p.matricula_id and status = 'ativa';
   update public.notificacoes set lida = true
    where matricula_id = p.matricula_id and tipo in ('vence_em_breve','vencido','vaga_liberada');
+  update public.notificacoes set lida = true
+   where aluno_id = p.aluno_id and tipo = 'pagamento_informado';
 end $$;
 
 -- Tranca um mês (planos semestral/anual). O mês vai para o final do plano.
@@ -435,6 +476,100 @@ grant execute on function public.registrar_pagamento(uuid, text, date)      to a
 grant execute on function public.trancar_mes(uuid, date)                    to authenticated;
 grant execute on function public.desfazer_trancamento(uuid)                 to authenticated;
 grant execute on function public.relatorio_mensal(int, int)                 to authenticated;
+
+-- ---------------------------------------------------------------------
+-- Funções do ALUNO (cada aluno só enxerga os próprios dados)
+-- ---------------------------------------------------------------------
+
+-- Liga o usuário logado aos cadastros de aluno com o mesmo e-mail.
+-- Só vale para e-mail CONFIRMADO (impede alguém de se passar por outro aluno).
+-- Retorna quantos cadastros de aluno este usuário acessa.
+create or replace function public.vincular_aluno()
+returns integer language plpgsql security definer set search_path = public as $$
+declare v_email text; v_conf timestamptz; v_qtd int;
+begin
+  if auth.uid() is null then return 0; end if;
+  select email, email_confirmed_at into v_email, v_conf from auth.users where id = auth.uid();
+  if v_email is not null and v_conf is not null then
+    update public.alunos set user_id = auth.uid()
+     where user_id is null and lower(trim(email)) = lower(v_email);
+  end if;
+  select count(*) into v_qtd from public.alunos where user_id = auth.uid();
+  return v_qtd;
+end $$;
+
+-- Dados do painel do aluno: aulas, horários, valores e vencimentos.
+create or replace function public.painel_aluno()
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare r jsonb;
+begin
+  if auth.uid() is null then raise exception 'Acesso negado.'; end if;
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', a.id, 'nome', a.nome, 'ativo', a.ativo,
+           'matriculas', coalesce((
+              select jsonb_agg(jsonb_build_object(
+                       'id', m.id, 'status', m.status, 'plano', m.plano,
+                       'data_inicio', m.data_inicio, 'data_fim', m.data_fim,
+                       'aula', au.nome, 'horarios', au.horarios,
+                       'preco', public._preco_do_plano(m.aula_id, m.plano),
+                       'pendente', (select jsonb_build_object('id', p.id, 'valor', p.valor, 'vencimento', p.vencimento)
+                                      from public.pagamentos p
+                                     where p.matricula_id = m.id and p.status = 'pendente'
+                                     order by p.vencimento limit 1)
+                     ) order by au.ordem, au.nome)
+                from public.matriculas m join public.aulas au on au.id = m.aula_id
+               where m.aluno_id = a.id and m.status in ('ativa','espera')), '[]'::jsonb),
+           'ultimo_pagamento', (select max(pago_em) from public.pagamentos where aluno_id = a.id and status = 'pago'),
+           'pagamento_informado_em', (select max(created_at) from public.notificacoes
+                                       where aluno_id = a.id and tipo = 'pagamento_informado')
+         ) order by a.nome), '[]'::jsonb)
+    into r
+    from public.alunos a
+   where a.user_id = auth.uid();
+  return r;
+end $$;
+
+-- Aluno avisa que pagou: gera uma notificação (banner) para o gestor.
+create or replace function public.informar_pagamento(p_forma text default null, p_obs text default null)
+returns integer language plpgsql security definer set search_path = public as $$
+declare
+  a record; v_total numeric; v_venc date; v_msg text; v_qtd int := 0;
+  v_forma text := left(nullif(trim(p_forma), ''), 40);
+  v_obs   text := left(nullif(trim(p_obs), ''), 300);
+begin
+  if auth.uid() is null then raise exception 'Acesso negado.'; end if;
+  if exists (select 1 from public.notificacoes n join public.alunos al on al.id = n.aluno_id
+              where al.user_id = auth.uid() and n.tipo = 'pagamento_informado'
+                and n.created_at > now() - interval '10 minutes') then
+    raise exception 'Você já avisou o pagamento há poucos minutos. O gestor já foi notificado.';
+  end if;
+  for a in select id, nome from public.alunos where user_id = auth.uid() order by nome loop
+    select sum(coalesce(p.valor, public._preco_do_plano(m.aula_id, m.plano), 0)),
+           min(coalesce(p.vencimento, m.data_fim))
+      into v_total, v_venc
+      from public.matriculas m
+      left join public.pagamentos p on p.matricula_id = m.id and p.status = 'pendente'
+     where m.aluno_id = a.id and m.status = 'ativa';
+    continue when v_venc is null;
+    v_msg := a.nome || ' informou que pagou a(s) mensalidade(s): R$ '
+             || replace(to_char(coalesce(v_total, 0), 'FM999999990.00'), '.', ',')
+             || ' (vencimento ' || to_char(v_venc, 'DD/MM/YYYY') || ').'
+             || coalesce(' Forma: ' || v_forma || '.', '')
+             || coalesce(' Obs.: ' || v_obs, '');
+    insert into public.notificacoes (tipo, aluno_id, referencia, mensagem)
+    values ('pagamento_informado', a.id, current_date, v_msg);
+    v_qtd := v_qtd + 1;
+  end loop;
+  if v_qtd = 0 then raise exception 'Você não tem mensalidades ativas para informar.'; end if;
+  return v_qtd;
+end $$;
+
+revoke all on function public.vincular_aluno()                  from public, anon;
+revoke all on function public.painel_aluno()                    from public, anon;
+revoke all on function public.informar_pagamento(text, text)    from public, anon;
+grant execute on function public.vincular_aluno()               to authenticated;
+grant execute on function public.painel_aluno()                 to authenticated;
+grant execute on function public.informar_pagamento(text, text) to authenticated;
 
 -- ---------------------------------------------------------------------
 -- Fotos das aulas (Storage): leitura pública, escrita só de gestores

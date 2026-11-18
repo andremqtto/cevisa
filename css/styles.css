@@ -228,6 +228,73 @@ td.num, th.num { text-align: right; white-space: nowrap; }
 .setup { max-width: 640px; margin: 60px auto; background: #fff; border-radius: 18px; padding: 28px; border: 1px solid var(--borda); }
 .setup code { background: var(--azul-fundo); padding: 2px 6px; border-radius: 6px; }
 
+/* ------------------------------------------------------------ login */
+.link { background: none; border: 0; padding: 4px 2px; color: var(--azul); font-weight: 700; text-decoration: underline; cursor: pointer; }
+.login-troca { text-align: center; margin: 16px 0 0; color: var(--suave); font-size: 15px; }
+
+/* ------------------------------------------------------------ horários */
+.horarios { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 14.5px; }
+.horarios li { display: flex; gap: 8px; align-items: flex-start; }
+.horarios svg { flex: none; margin-top: 3px; color: var(--azul-claro); }
+
+/* ------------------------------------------------------------ balão do WhatsApp */
+.whats-flutuante {
+  position: fixed; z-index: 50;
+  right: max(18px, env(safe-area-inset-right)); bottom: calc(18px + env(safe-area-inset-bottom));
+  display: flex; align-items: center; gap: 8px;
+  background: #13843f; color: #fff; text-decoration: none; font-weight: 700;
+  padding: 12px 20px 12px 14px; border-radius: 999px; box-shadow: 0 8px 24px rgba(0, 0, 0, .25);
+}
+.whats-flutuante svg { width: 28px; height: 28px; flex: none; }
+.whats-flutuante:hover { background: #0f6e34; }
+body:has(#whats) main { padding-bottom: 110px; }
+
+/* ------------------------------------------------------------ banners do gestor */
+#banners {
+  position: fixed; top: 76px; left: 50%; transform: translateX(-50%); z-index: 90;
+  width: min(560px, calc(100vw - 24px)); display: flex; flex-direction: column; gap: 8px;
+}
+.banner {
+  display: flex; align-items: flex-start; background: var(--ok); color: #fff; border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .28); animation: banner-entra .3s ease-out;
+}
+.banner-corpo {
+  flex: 1; min-width: 0; background: none; border: 0; color: inherit; text-align: left; cursor: pointer;
+  padding: 12px 4px 12px 16px; display: flex; flex-direction: column; gap: 2px;
+}
+.banner-corpo small { opacity: .85; text-decoration: underline; }
+.banner .banner-fechar { color: #fff; margin: 4px; flex: none; }
+.banner .banner-fechar:hover { background: rgba(255, 255, 255, .15); }
+@keyframes banner-entra { from { opacity: 0; transform: translateY(-10px); } }
+
+/* ------------------------------------------------------------ painel do aluno */
+.painel-resumo {
+  display: grid; grid-template-columns: 1fr auto; gap: 18px; align-items: center;
+  background: linear-gradient(135deg, var(--azul) 0%, var(--azul-esc) 100%); color: #fff;
+  border-radius: var(--raio); padding: 22px 24px; margin-bottom: 26px; box-shadow: var(--sombra);
+}
+.painel-resumo .rotulo { display: block; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; opacity: .85; }
+.painel-resumo .total { display: block; font-size: 38px; font-weight: 800; line-height: 1.15; margin: 2px 0 6px; }
+.painel-resumo .total-ok { color: #a8f0c2; }
+.painel-resumo .venc { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.painel-botoes { display: flex; flex-direction: column; gap: 10px; min-width: 220px; }
+.painel-botoes .btn { display: flex; align-items: center; justify-content: center; gap: 8px; text-align: center; }
+.painel-botoes .btn svg { width: 20px; height: 20px; }
+.btn.sec-claro { background: transparent; color: #fff; border: 1.5px solid rgba(255, 255, 255, .7); }
+.btn.sec-claro:hover { background: rgba(255, 255, 255, .12); }
+.secao-titulo { font-size: 22px; margin-bottom: 14px; }
+.minhas-aulas { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 16px; }
+.minha-aula {
+  background: var(--card); border: 1px solid var(--borda); border-radius: 16px; box-shadow: var(--sombra);
+  padding: 18px 18px 8px; display: flex; flex-direction: column; gap: 10px;
+}
+.minha-aula header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.minha-aula h3 { font-size: 19px; }
+.linhas { margin: 0; }
+.linhas > div { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-top: 1px solid var(--borda); }
+.linhas dt { color: var(--suave); font-weight: 600; }
+.linhas dd { margin: 0; text-align: right; font-weight: 700; }
+
 /* grades que nunca estouram a largura de telas estreitas */
 .grade-aulas { grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); }
 .dados { grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr)); }
@@ -237,7 +304,8 @@ td.num, th.num { text-align: right; white-space: nowrap; }
 @media (hover: none) {
   .nav a:hover:not(.atual), .icone-btn:hover, .notif:hover, tbody tr.clicavel:hover { background: none; }
   .btn.sec:hover { background: #fff; }
-  .btn:not(.sec):not(.claro):not(.perigo):hover { background: var(--azul); }
+  .btn:not(.sec):not(.claro):not(.perigo):not(.sec-claro):hover { background: var(--azul); }
+  .btn.sec-claro:hover { background: transparent; }
   tbody tr.clicavel:active, .notif:active { background: var(--azul-fundo); }
 }
 
@@ -289,9 +357,24 @@ td.num, th.num { text-align: right; white-space: nowrap; }
   /* notificações ocupam a largura da tela */
   .painel-notif { position: fixed; top: 60px; left: 10px; right: 10px; width: auto; max-height: calc(100dvh - 140px); }
 
-  /* modal vira "folha" que sobe de baixo */
-  .modal-fundo { place-items: end center; padding: 24px 0 0; }
-  .modal { max-width: 100% !important; border-radius: 18px 18px 0 0; max-height: 92vh; max-height: 92dvh; }
+  /* modal vira "folha" que sobe de baixo, sempre dentro da área visível (acima do teclado) */
+  .modal-fundo {
+    place-items: end center; padding: 24px 0 0;
+    inset: auto 0; top: var(--vv-topo, 0px); height: var(--vv-altura, 100%);
+  }
+  .modal { max-width: 100% !important; border-radius: 18px 18px 0 0; max-height: 92vh; max-height: calc(var(--vv-altura, 100dvh) - 24px); }
+
+  /* enquanto digita, some o que é fixo no rodapé para sobrar espaço */
+  html.digitando .nav, html.digitando .whats-flutuante { display: none; }
+
+  /* balão, banners e painel do aluno */
+  .whats-flutuante { padding: 14px; }
+  .whats-flutuante span { display: none; }
+  #banners { top: 62px; }
+  .painel-resumo { grid-template-columns: 1fr; padding: 20px 18px; }
+  .painel-resumo .total { font-size: 32px; }
+  .painel-botoes { min-width: 0; }
+  .secao-titulo { font-size: 20px; }
   .modal-topo { padding: 10px 8px 8px 18px; }
   .modal-corpo { padding: 16px 16px calc(20px + env(safe-area-inset-bottom)); }
 

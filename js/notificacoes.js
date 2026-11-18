@@ -1,11 +1,21 @@
-// Sino de notificações do gestor (vencimentos de plano e vagas liberadas).
+// Sino de notificações do gestor (vencimentos, vagas liberadas e pagamentos informados)
+// e banners de "aluno informou pagamento" no topo da tela.
 import { sb, ok } from './supabase.js';
 import { esc, toast, fmtDate } from './ui.js';
 
 let timer = null;
+let timerBanners = null;
+let canal = null;
+
+const ROTULOS = {
+  vencido: 'Plano vencido',
+  vaga_liberada: 'Vaga liberada',
+  vence_em_breve: 'Vence em breve',
+  pagamento_informado: 'Pagamento informado',
+};
 
 export function iniciarNotificacoes(host, { navegar }) {
-  pararNotificacoes();
+  pararNotificacoes({ manterBanners: true });
   host.innerHTML = `
     <div class="sino">
       <button class="icone-btn sino-btn" type="button" aria-label="Notificações" aria-expanded="false">
@@ -27,6 +37,53 @@ export function iniciarNotificacoes(host, { navegar }) {
     } catch { /* silencioso: tenta de novo no próximo ciclo */ }
   }
 
+  async function marcarLida(id) {
+    try { ok(await sb.from('notificacoes').update({ lida: true }).eq('id', id)); } catch { /* segue */ }
+    atualizarContagem();
+  }
+
+  // ---------------------------------------------------------------- banners
+  function caixaBanners() {
+    let box = document.getElementById('banners');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'banners';
+      box.setAttribute('aria-live', 'assertive');
+      document.body.appendChild(box);
+    }
+    return box;
+  }
+
+  function mostrarBanner(n) {
+    if (document.querySelector(`.banner[data-id="${n.id}"]`)) return;
+    const el = document.createElement('div');
+    el.className = 'banner';
+    el.dataset.id = n.id;
+    el.innerHTML = `
+      <button class="banner-corpo" type="button">
+        <strong>Pagamento informado pelo aluno</strong>
+        <span>${esc(n.mensagem)}</span>
+        <small>Toque para abrir o painel do aluno</small>
+      </button>
+      <button class="icone-btn banner-fechar" type="button" aria-label="Dispensar aviso">×</button>`;
+    el.querySelector('.banner-corpo').onclick = () => {
+      el.remove();
+      marcarLida(n.id);
+      if (n.aluno_id) navegar(`#/alunos/${n.aluno_id}`);
+    };
+    el.querySelector('.banner-fechar').onclick = () => { el.remove(); marcarLida(n.id); };
+    caixaBanners().appendChild(el);
+  }
+
+  async function buscarBanners() {
+    try {
+      const itens = ok(await sb.from('notificacoes').select('id,aluno_id,mensagem,created_at')
+        .eq('tipo', 'pagamento_informado').eq('lida', false).order('created_at').limit(5));
+      itens.forEach(mostrarBanner);
+    } catch { /* tenta de novo no próximo ciclo */ }
+  }
+
+  // ---------------------------------------------------------------- painel do sino
   async function gerar() {
     try { ok(await sb.rpc('atualizar_pendencias')); } catch (e) { console.warn('atualizar_pendencias:', e.message); }
     await atualizarContagem();
@@ -43,7 +100,7 @@ export function iniciarNotificacoes(host, { navegar }) {
           <button class="btn sec pequeno" type="button" data-todas>Marcar todas como lidas</button></header>
         ${itens.length ? itens.map((n) => `
           <button class="notif ${n.lida ? '' : 'nova'} ${n.tipo}" type="button" data-id="${n.id}" data-aluno="${n.aluno_id || ''}">
-            <strong>${n.tipo === 'vencido' ? 'Plano vencido' : n.tipo === 'vaga_liberada' ? 'Vaga liberada' : 'Vence em breve'}</strong>
+            <strong>${ROTULOS[n.tipo] || 'Aviso'}</strong>
             <div>${esc(n.mensagem)}</div>
             <small>${fmtDate(n.created_at)}</small>
           </button>`).join('') : '<p class="vazio">Nenhuma notificação por enquanto.</p>'}`;
@@ -62,6 +119,7 @@ export function iniciarNotificacoes(host, { navegar }) {
     if (e.target.closest('[data-todas]')) {
       try {
         ok(await sb.from('notificacoes').update({ lida: true }).eq('lida', false));
+        document.querySelectorAll('#banners .banner').forEach((b) => b.remove());
         await atualizarContagem();
         await abrir();
       } catch (err) { toast(err.message, 'erro'); }
@@ -69,21 +127,34 @@ export function iniciarNotificacoes(host, { navegar }) {
     }
     const item = e.target.closest('.notif');
     if (!item) return;
-    try { ok(await sb.from('notificacoes').update({ lida: true }).eq('id', item.dataset.id)); } catch { /* segue */ }
+    document.querySelector(`.banner[data-id="${item.dataset.id}"]`)?.remove();
     fechar();
-    atualizarContagem();
+    marcarLida(item.dataset.id);
     if (item.dataset.aluno) navegar(`#/alunos/${item.dataset.aluno}`);
   };
   document.addEventListener('click', fecharFora);
   function fecharFora(e) { if (!host.contains(e.target)) fechar(); }
   host._limpar = () => document.removeEventListener('click', fecharFora);
 
+  // Tempo real: o banner aparece na hora em que o aluno avisa (com consulta periódica de reserva).
+  canal = sb.channel(`notificacoes-gestor-${Date.now()}`)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notificacoes' }, (p) => {
+      atualizarContagem();
+      if (p.new?.tipo === 'pagamento_informado') mostrarBanner(p.new);
+    })
+    .subscribe();
+
   gerar();
+  buscarBanners();
   timer = setInterval(gerar, 5 * 60 * 1000);
+  timerBanners = setInterval(buscarBanners, 60 * 1000);
 }
 
-export function pararNotificacoes() {
+export function pararNotificacoes({ manterBanners = false } = {}) {
   if (timer) clearInterval(timer);
-  timer = null;
+  if (timerBanners) clearInterval(timerBanners);
+  timer = timerBanners = null;
+  if (canal) { sb.removeChannel(canal); canal = null; }
   document.querySelectorAll('#notif-host').forEach((h) => h._limpar?.());
+  if (!manterBanners) document.getElementById('banners')?.remove();
 }

@@ -119,7 +119,7 @@ export function editarAluno(aluno, aoSalvar) {
           <label class="campo"><span>CPF</span><input type="text" name="cpf" inputmode="numeric" maxlength="14" value="${esc(a.cpf)}"></label>
           <label class="campo"><span>Data de nascimento</span><input type="date" name="data_nascimento" max="${hojeISO()}" value="${esc(a.data_nascimento)}"></label>
           <label class="campo"><span>Telefone / WhatsApp</span><input type="tel" name="telefone" maxlength="20" value="${esc(a.telefone)}"></label>
-          <label class="campo"><span>E-mail</span><input type="email" name="email" maxlength="120" value="${esc(a.email)}"></label>
+          <label class="campo"><span>E-mail</span><input type="email" name="email" maxlength="120" inputmode="email" autocapitalize="none" value="${esc(a.email)}"><small>O aluno usa este e-mail para entrar no app.</small></label>
         </div>
         <label class="campo"><span>Responsável</span><input type="text" name="responsavel" maxlength="120" value="${esc(a.responsavel)}"><small>Para bebês e crianças.</small></label>
         <label class="campo"><span>Endereço</span><input type="text" name="endereco" maxlength="200" value="${esc(a.endereco)}"></label>
@@ -192,7 +192,8 @@ export async function renderFicha(el, id, { navegar }) {
     <div class="pagina-topo">
       <div>
         <h1>${esc(aluno.nome)} <span class="badge ${aluno.ativo ? 'ok' : 'cinza'}" style="vertical-align:middle">${aluno.ativo ? 'Ativo' : 'Desativado'}</span></h1>
-        <p class="sub"><span class="badge ${s.cls}">${s.txt}</span> · cliente desde ${fmtDate((aluno.created_at || '').slice(0, 10))} · total pago ${money(totalPago)}</p>
+        <p class="sub"><span class="badge ${s.cls}">${s.txt}</span> · cliente desde ${fmtDate((aluno.created_at || '').slice(0, 10))} · total pago ${money(totalPago)}
+          · ${aluno.user_id ? '<span class="badge ok">Acesso ao app ativo</span>' : aluno.email ? '<span class="badge cinza">Ainda não acessou o app</span>' : '<span class="badge alerta">Sem e-mail: cadastre um para liberar o app</span>'}</p>
       </div>
       <div class="acoes-linha no-print">
         <button class="btn sec" type="button" id="editar">Editar dados</button>

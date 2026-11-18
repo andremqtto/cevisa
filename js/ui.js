@@ -1,4 +1,5 @@
 // Utilitários de interface: formatação, modal, toast, confirmação.
+import * as config from './config.js';
 
 export const esc = (v) =>
   String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -166,6 +167,64 @@ new MutationObserver(() => {
   rotularAgendado = true;
   requestAnimationFrame(() => { rotularAgendado = false; rotularTabelas(); });
 }).observe(document.body, { childList: true, subtree: true });
+
+// ---------------------------------------------------------------- teclado do celular
+// Mantém o campo em foco visível acima do teclado virtual, em todo o app.
+// --vv-altura / --vv-topo descrevem a área realmente visível (usadas pelo CSS dos modais).
+const vv = window.visualViewport;
+const docEl = document.documentElement;
+const ehToque = () => matchMedia('(hover: none)').matches;
+const ehCampoTexto = (el) =>
+  !!el?.matches?.('input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=button]):not([type=submit]):not([type=range]), textarea');
+
+let tMostrar;
+function mostrarCampo(el) {
+  clearTimeout(tMostrar);
+  tMostrar = setTimeout(() => {
+    if (document.activeElement === el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, 150);
+}
+
+function medirViewport() {
+  if (!vv) return;
+  docEl.style.setProperty('--vv-altura', `${Math.round(vv.height)}px`);
+  docEl.style.setProperty('--vv-topo', `${Math.round(vv.offsetTop)}px`);
+}
+if (vv) {
+  medirViewport();
+  vv.addEventListener('scroll', medirViewport);
+  vv.addEventListener('resize', () => {
+    medirViewport();
+    // o teclado terminou de abrir/fechar: reposiciona o campo ativo
+    if (ehToque() && ehCampoTexto(document.activeElement)) mostrarCampo(document.activeElement);
+  });
+}
+document.addEventListener('focusin', (e) => {
+  if (!ehToque() || !ehCampoTexto(e.target)) return;
+  docEl.classList.add('digitando');
+  mostrarCampo(e.target);
+});
+document.addEventListener('focusout', () => {
+  setTimeout(() => { if (!ehCampoTexto(document.activeElement)) docEl.classList.remove('digitando'); }, 120);
+});
+
+// ---------------------------------------------------------------- WhatsApp e horários
+/** Link wa.me para o número configurado em config.js, ou null se ainda não houver número. */
+export function linkWhatsApp(mensagem = '') {
+  const numero = String(config.WHATSAPP_NUMERO || '').replace(/\D/g, '');
+  if (!numero) return null;
+  return `https://wa.me/${numero}${mensagem ? `?text=${encodeURIComponent(mensagem)}` : ''}`;
+}
+
+export const ICONE_WHATSAPP = `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 20.5l1.3-4.2A8.5 8.5 0 1 1 8 19.3z"/><path d="M9 8.6c0 3.3 3 6.4 6.4 6.4l1.1-1.6-2-1-1 .8c-1-.4-2.3-1.7-2.7-2.7l.8-1-1-2z" fill="currentColor" stroke-width="1"/></svg>`;
+
+/** Lista de horários (texto livre, um por linha) em HTML. */
+export function horariosHTML(texto) {
+  const linhas = String(texto || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  if (!linhas.length) return '';
+  const relogio = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
+  return `<ul class="horarios" aria-label="Horários">${linhas.map((l) => `<li>${relogio}<span>${esc(l)}</span></li>`).join('')}</ul>`;
+}
 
 export const carregando = (txt = 'Carregando…') => `<div class="carregando"><span class="spinner"></span>${esc(txt)}</div>`;
 export const vazio = (txt) => `<p class="vazio">${esc(txt)}</p>`;

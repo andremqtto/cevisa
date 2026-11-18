@@ -1,10 +1,10 @@
 // Tela inicial: aulas e preços (pública). Gestores editam tudo aqui.
 import { sb, ok } from './supabase.js';
-import { esc, money, abrirModal, toast, confirmar, comBotao, carregando, vazio, erroBox, planoLabel } from './ui.js';
+import { esc, money, abrirModal, toast, confirmar, comBotao, carregando, vazio, erroBox, planoLabel, horariosHTML } from './ui.js';
 
 const FOTO_MAX = 5 * 1024 * 1024;
 
-export async function renderHome(el, { isGestor, abrirLogin }) {
+export async function renderHome(el, { isGestor, logado = false }) {
   el.innerHTML = carregando('Carregando aulas…');
   try {
     let aulas, ocupacao = {};
@@ -18,7 +18,7 @@ export async function renderHome(el, { isGestor, abrirLogin }) {
     } else {
       aulas = ok(await sb.from('aulas_publicas').select('*'));
     }
-    desenhar(el, aulas, ocupacao, { isGestor, abrirLogin });
+    desenhar(el, aulas, ocupacao, { isGestor, logado });
   } catch (e) {
     el.innerHTML = erroBox(e);
   }
@@ -37,7 +37,7 @@ function desenhar(el, aulas, ocupacao, ctx) {
       ${isGestor ? '<button class="nova-aula" data-nova type="button">＋ Nova aula</button>' : ''}
     </div>
     ${!aulas.length && !isGestor ? vazio('Em breve, novas aulas por aqui.') : ''}
-    ${!isGestor ? '<p class="sub" style="margin-top:28px">Para se inscrever, procure a recepção do Spa Médico Adventista Cevisa.</p>' : ''}`;
+    ${!isGestor ? `<p class="sub" style="margin-top:28px">Para se inscrever${ctx.logado ? ' em outra aula' : ''}, procure a recepção do Spa Médico Adventista Cevisa.</p>` : ''}`;
 
   el.onclick = (e) => {
     const b = e.target.closest('[data-nova],[data-editar],[data-turma]');
@@ -66,6 +66,7 @@ function cartao(a, oc, isGestor) {
       <div class="aula-corpo">
         <h2>${esc(a.nome)}</h2>
         ${a.descricao ? `<p>${esc(a.descricao)}</p>` : ''}
+        ${horariosHTML(a.horarios)}
         <div class="precos">
           ${precoBox('Mensal', a.preco_mensal, 1)}
           ${precoBox('Semestral', a.preco_semestral, 6)}
@@ -111,7 +112,7 @@ async function verTurma(aula) {
 // ------------------------------------------------------------------ editar / criar aula
 function editarAula(aula, aoSalvar) {
   const novo = !aula;
-  const a = aula || { nome: '', descricao: '', foto_url: null, preco_mensal: null, preco_semestral: null, preco_anual: null, vagas: 20, ativa: true, ordem: 0 };
+  const a = aula || { nome: '', descricao: '', horarios: '', foto_url: null, preco_mensal: null, preco_semestral: null, preco_anual: null, vagas: 20, ativa: true, ordem: 0 };
   const m = abrirModal({
     titulo: novo ? 'Nova aula' : `Editar — ${a.nome}`,
     largura: 580,
@@ -119,6 +120,7 @@ function editarAula(aula, aoSalvar) {
       <form id="f-aula" novalidate>
         <label class="campo"><span>Nome da aula *</span><input type="text" name="nome" required maxlength="80" value="${esc(a.nome)}"></label>
         <label class="campo"><span>Descrição</span><textarea name="descricao" maxlength="400">${esc(a.descricao)}</textarea></label>
+        <label class="campo"><span>Horários</span><textarea name="horarios" maxlength="500" rows="3" placeholder="Seg, Qua e Sex · 07h às 08h&#10;Ter e Qui · 18h às 19h">${esc(a.horarios)}</textarea><small>Um horário por linha. Aparece para visitantes e no painel dos alunos.</small></label>
         <div class="grade3">
           <label class="campo"><span>Mensal (R$)</span><input type="number" name="preco_mensal" min="0" step="0.01" inputmode="decimal" value="${a.preco_mensal ?? ''}"></label>
           <label class="campo"><span>Semestral (R$)</span><input type="number" name="preco_semestral" min="0" step="0.01" inputmode="decimal" value="${a.preco_semestral ?? ''}"></label>
@@ -200,6 +202,7 @@ function editarAula(aula, aoSalvar) {
       const dados = {
         nome,
         descricao: form.descricao.value.trim() || null,
+        horarios: form.horarios.value.split('\n').map((l) => l.trim()).filter(Boolean).join('\n') || null,
         preco_mensal: num('preco_mensal'),
         preco_semestral: num('preco_semestral'),
         preco_anual: num('preco_anual'),
