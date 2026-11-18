@@ -1,7 +1,7 @@
 // Painel do aluno: aulas contratadas, horários, valores, vencimento e aviso de pagamento.
 import { sb, ok } from './supabase.js';
 import {
-  esc, money, fmtDate, planoLabel, hojeISO, diasEntre, abrirModal, toast, comBotao, carregando, vazio, erroBox,
+  esc, money, fmtDate, planoLabel, PLANOS, hojeISO, diasEntre, abrirModal, toast, comBotao, carregando, vazio, erroBox,
   linkWhatsApp, horariosHTML, ICONE_WHATSAPP,
 } from './ui.js';
 
@@ -61,6 +61,7 @@ export async function renderPainelAluno(el) {
     </div>
 
     ${inativo ? '<div class="aviso alerta">Há um cadastro desativado. Fale com o gestor para regularizar.</div>' : ''}
+    ${alunos.flatMap((a) => (a.solicitacoes || []).map((s) => `<div class="aviso info">Pedido de inscrição em <strong>${esc(s.aula)}</strong> (plano ${planoLabel(s.plano)})${varios ? ` para ${esc(a.nome.split(' ')[0])}` : ''} enviado em ${fmtDate(s.created_at.slice(0, 10))}. Aguardando a recepção confirmar.</div>`)).join('')}
     ${informado ? `<div class="aviso info">Você avisou o pagamento em ${fmtDate(informado.slice(0, 10))}. Assim que o gestor confirmar, este painel será atualizado.</div>` : ''}
 
     <section class="painel-resumo">
@@ -86,7 +87,7 @@ export async function renderPainelAluno(el) {
 
     <h2 class="secao-titulo">Minhas aulas</h2>
     ${temAulas ? `<div class="minhas-aulas">${alunos.flatMap((a) => a.matriculas.map((m) => cartaoAula(a, m, porMatricula[m.id], varios, hoje))).join('')}</div>`
-      : `<div class="card">${vazio('Você ainda não está inscrito em nenhuma aula. Fale com a recepção para se inscrever.')}</div>`}`;
+      : `<div class="card">${vazio('Você ainda não está inscrito em nenhuma aula.')}<p style="text-align:center;margin:0 0 6px"><a class="btn" href="#/aulas">Ver aulas e me inscrever</a></p></div>`}`;
 
   el.querySelector('#ja-paguei').onclick = () => informarPagamento({ total, vencimento: vencimento || proximo, aPagar }, () => renderPainelAluno(el));
   const falar = el.querySelector('#falar');
@@ -117,6 +118,62 @@ function cartaoAula(aluno, m, item, varios, hoje) {
           <div><dt>Pago até</dt><dd>${pagoAte}</dd></div>`}
       </dl>
     </article>`;
+}
+
+// ------------------------------------------------------------------ pedido de inscrição
+/** Aluno escolhe o plano e pede inscrição; o gestor/admin recebe uma notificação e conclui a inscrição. */
+export function abrirPedidoInscricao(aula, alunos, aoConcluir) {
+  const livres = alunos.filter((al) =>
+    !al.matriculas.some((m) => m.aula_id === aula.id) && !al.solicitacoes?.some((s) => s.aula_id === aula.id));
+  const preco = (p) => aula[`preco_${p}`];
+  const meses = { mensal: 1, semestral: 6, anual: 12 };
+  const primeiroComPreco = Object.keys(PLANOS).find((p) => preco(p) !== null && preco(p) !== undefined) || 'mensal';
+
+  const m = abrirModal({
+    titulo: `Inscrição — ${aula.nome}`,
+    largura: 480,
+    corpo: `
+      <form id="f-pedido" novalidate>
+        ${horariosHTML(aula.horarios) ? `<div class="campo"><span style="font-weight:600;font-size:14px">Horários</span>${horariosHTML(aula.horarios)}</div>` : ''}
+        ${livres.length > 1 ? `
+          <label class="campo"><span>Aluno</span>
+            <select name="aluno">${livres.map((al) => `<option value="${al.id}">${esc(al.nome)}</option>`).join('')}</select></label>`
+          : `<input type="hidden" name="aluno" value="${livres[0]?.id || ''}">`}
+        <fieldset style="border:0;padding:0;margin:0 0 14px">
+          <legend style="font-weight:600;font-size:14px;margin-bottom:6px">Escolha o plano</legend>
+          <div style="display:grid;gap:8px">${Object.keys(PLANOS).map((p) => `
+            <label class="check plano-opcao">
+              <input type="radio" name="plano" value="${p}" ${p === primeiroComPreco ? 'checked' : ''}>
+              <span>${PLANOS[p]}${preco(p) && meses[p] > 1 ? `<small>${money(preco(p) / meses[p])}/mês</small>` : ''}</span>
+              <strong>${preco(p) === null || preco(p) === undefined ? 'a consultar' : money(preco(p))}</strong>
+            </label>`).join('')}</div>
+        </fieldset>
+        <label class="campo"><span>Observação (opcional)</span><textarea name="obs" maxlength="300" placeholder="Ex.: prefiro a turma da manhã"></textarea></label>
+        <div class="aviso info">A recepção vai receber seu pedido e confirmar a inscrição. Depois disso, o valor aparece no seu painel.</div>
+        <div id="pd-erro"></div>
+        <div class="acoes">
+          <button class="btn sec" type="button" data-cancelar>Cancelar</button>
+          <button class="btn" type="submit">Enviar pedido</button>
+        </div>
+      </form>`,
+  });
+  const form = m.el.querySelector('#f-pedido');
+  m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await comBotao(form.querySelector('[type=submit]'), async () => {
+      try {
+        ok(await sb.rpc('solicitar_inscricao', {
+          p_aluno: form.aluno.value, p_aula: aula.id, p_plano: form.plano.value, p_obs: form.obs.value,
+        }));
+        m.fechar();
+        toast('Pedido enviado! A recepção vai confirmar sua inscrição.');
+        aoConcluir();
+      } catch (err) {
+        m.el.querySelector('#pd-erro').innerHTML = `<div class="aviso erro">${esc(err.message)}</div>`;
+      }
+    });
+  });
 }
 
 function informarPagamento({ total, vencimento, aPagar }, aoConcluir) {

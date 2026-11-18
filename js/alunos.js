@@ -211,6 +211,50 @@ function novoAluno(navegar) {
   });
 }
 
+// ================================================================== EXCLUIR (permanente)
+function excluirAluno(aluno, mats, aoExcluir) {
+  const ativas = mats.filter((x) => x.status === 'ativa').length;
+  const m = abrirModal({
+    titulo: 'Excluir aluno',
+    largura: 460,
+    corpo: `
+      <form id="f-excluir" novalidate>
+        <div class="aviso erro" style="margin-top:0">Você vai excluir <strong>${esc(aluno.nome)}</strong> para sempre.</div>
+        <ul style="margin:0 0 14px;padding-left:20px">
+          <li>Ficha e dados pessoais</li>
+          <li>${mats.length} matrícula(s)${ativas ? ` — ${ativas} vaga(s) será(ão) liberada(s) para a lista de espera` : ''}</li>
+          <li>Todo o histórico de pagamentos (some dos relatórios)</li>
+          ${aluno.user_id ? '<li>O acesso do aluno ao app</li>' : ''}
+        </ul>
+        <label class="campo"><span>Para confirmar, digite <strong>EXCLUIR</strong></span>
+          <input type="text" name="confirma" autocomplete="off" autocapitalize="characters"></label>
+        <div id="ex-erro"></div>
+        <div class="acoes">
+          <button class="btn sec" type="button" data-cancelar>Cancelar</button>
+          <button class="btn perigo" type="submit" disabled>Excluir para sempre</button>
+        </div>
+      </form>`,
+  });
+  const form = m.el.querySelector('#f-excluir');
+  const btn = form.querySelector('[type=submit]');
+  m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
+  form.confirma.addEventListener('input', () => { btn.disabled = form.confirma.value.trim().toUpperCase() !== 'EXCLUIR'; });
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (form.confirma.value.trim().toUpperCase() !== 'EXCLUIR') return;
+    await comBotao(btn, async () => {
+      try {
+        ok(await sb.rpc('excluir_aluno', { p_aluno: aluno.id }));
+        m.fechar();
+        toast(`${aluno.nome} foi excluído(a).`);
+        aoExcluir();
+      } catch (err) {
+        m.el.querySelector('#ex-erro').innerHTML = `<div class="aviso erro">${esc(err.message)}</div>`;
+      }
+    });
+  });
+}
+
 // ================================================================== CADASTRO / EDIÇÃO
 export function editarAluno(aluno, aoSalvar) {
   const novo = !aluno;
@@ -268,7 +312,7 @@ export function editarAluno(aluno, aoSalvar) {
 // ================================================================== FICHA
 export async function renderFicha(el, id, { navegar }) {
   el.innerHTML = carregando('Carregando ficha…');
-  let aluno, mats, pags, filas;
+  let aluno, mats, pags, filas, pedidos = [];
   try {
     aluno = ok(await sb.from('alunos').select('*').eq('id', id).maybeSingle());
     if (!aluno) { el.innerHTML = `<a class="voltar" href="#/alunos">← Alunos</a>${erroBox('Aluno não encontrado.')}`; return; }
@@ -276,6 +320,10 @@ export async function renderFicha(el, id, { navegar }) {
       .eq('aluno_id', id).order('created_at', { ascending: false }));
     pags = ok(await sb.from('pagamentos').select('*, matriculas(aulas(nome))')
       .eq('aluno_id', id).order('vencimento', { ascending: false }));
+    // pedidos de inscrição feitos pelo aluno no app (ignora erro se o banco ainda não tiver a tabela)
+    const rp = await sb.from('solicitacoes_inscricao').select('id,aula_id,plano,observacao,created_at,aulas(nome)')
+      .eq('aluno_id', id).eq('status', 'pendente').order('created_at');
+    pedidos = rp.error ? [] : rp.data;
     // posição na lista de espera de cada matrícula em espera
     filas = {};
     const esperas = mats.filter((m) => m.status === 'espera');
@@ -309,6 +357,20 @@ export async function renderFicha(el, id, { navegar }) {
       </div>
     </div>
 
+    ${pedidos.length ? `
+    <section class="card pedidos no-print">
+      <h2>Pedidos de inscrição pelo app <span class="badge alerta">${pedidos.length}</span></h2>
+      <ul class="lista-equipe">${pedidos.map((p) => `
+        <li>
+          <div><strong>${esc(p.aulas?.nome)}</strong> · plano ${planoLabel(p.plano)}
+            <small>pedido em ${fmtDate(p.created_at.slice(0, 10))}${p.observacao ? ` · “${esc(p.observacao)}”` : ''}</small></div>
+          <div class="acoes-linha">
+            <button class="btn sec perigo pequeno" type="button" data-recusar-pedido="${p.id}">Recusar</button>
+            <button class="btn pequeno" type="button" data-aceitar-pedido="${p.id}">Inscrever agora</button>
+          </div>
+        </li>`).join('')}</ul>
+    </section>` : ''}
+
     <section class="card">
       <h2>Dados pessoais</h2>
       <dl class="dados">
@@ -340,9 +402,17 @@ export async function renderFicha(el, id, { navegar }) {
             <td>${fmtDate(p.pago_em)}</td><td>${esc(p.forma || '—')}</td>
             <td class="num">${p.status === 'pendente' ? `<button class="btn pequeno" type="button" data-pagar="${p.id}">Registrar pagamento</button>` : ''}</td></tr>`;
         }).join('')}</tbody></table></div>` : vazio('Nenhum pagamento gerado ainda.')}
+    </section>
+
+    <section class="card zona-perigo no-print">
+      <h2>Excluir aluno</h2>
+      <p class="sub" style="margin:0 0 14px">Apaga <strong>permanentemente</strong> a ficha, as matrículas, o histórico de pagamentos e o acesso ao app.
+        Isso não pode ser desfeito e os pagamentos deixam de aparecer nos relatórios. Para só pausar, use “Desativar aluno”.</p>
+      <button class="btn perigo" type="button" id="excluir">Excluir aluno permanentemente</button>
     </section>`;
 
   // ---- ações
+  el.querySelector('#excluir').onclick = () => excluirAluno(aluno, mats, () => navegar('#/alunos'));
   el.querySelector('#editar').onclick = () => editarAluno(aluno, recarregar);
   el.querySelector('#nova-senha')?.addEventListener('click', async (e) => {
     if (!(await confirmar(`Gerar uma nova senha temporária para ${aluno.nome}? A senha atual dele deixa de funcionar.`, { titulo: 'Nova senha', confirmarTexto: 'Gerar nova senha' }))) return;
@@ -368,6 +438,23 @@ export async function renderFicha(el, id, { navegar }) {
     });
   };
   el.querySelector('#inscrever').onclick = () => inscrever(aluno, mats, recarregar);
+  el.querySelectorAll('[data-aceitar-pedido]').forEach((b) => {
+    b.onclick = () => {
+      const p = pedidos.find((x) => x.id === b.dataset.aceitarPedido);
+      inscrever(aluno, mats, recarregar, { aula_id: p.aula_id, plano: p.plano });
+    };
+  });
+  el.querySelectorAll('[data-recusar-pedido]').forEach((b) => {
+    b.onclick = async () => {
+      const p = pedidos.find((x) => x.id === b.dataset.recusarPedido);
+      if (!(await confirmar(`Recusar o pedido de ${aluno.nome} para ${p.aulas?.nome}? Lembre-se de avisar o aluno.`, { titulo: 'Recusar pedido', confirmarTexto: 'Recusar', perigo: true }))) return;
+      await comBotao(b, async () => {
+        ok(await sb.rpc('recusar_solicitacao', { p_solicitacao: p.id }));
+        toast('Pedido recusado.');
+        recarregar();
+      });
+    };
+  });
 
   el.onclick = async (e) => {
     const pagar = e.target.closest('[data-pagar]');
@@ -431,7 +518,8 @@ function linhaMatricula(m, posicao, hoje) {
 }
 
 // ================================================================== INSCREVER
-async function inscrever(aluno, mats, aoConcluir) {
+async function inscrever(aluno, mats, aoConcluir, preset = {}) {
+  // preset: aula e plano escolhidos pelo aluno num pedido de inscrição feito pelo app
   const m = abrirModal({ titulo: `Inscrever ${aluno.nome}`, largura: 540, corpo: carregando() });
   let aulas, ocupacao = {};
   try {
@@ -451,7 +539,7 @@ async function inscrever(aluno, mats, aoConcluir) {
         <select name="aula">${livres.map((a) => {
           const o = ocupacao[a.id] || { ativa: 0, espera: 0 };
           const cheia = o.ativa >= a.vagas;
-          return `<option value="${a.id}">${esc(a.nome)} — ${cheia ? `CHEIA (fila: ${o.espera})` : `${a.vagas - o.ativa} vaga(s)`}</option>`;
+          return `<option value="${a.id}" ${a.id === preset.aula_id ? 'selected' : ''}>${esc(a.nome)} — ${cheia ? `CHEIA (fila: ${o.espera})` : `${a.vagas - o.ativa} vaga(s)`}</option>`;
         }).join('')}</select></label>
       <fieldset style="border:0;padding:0;margin:0 0 14px">
         <legend style="font-weight:600;font-size:14px;margin-bottom:6px">Plano</legend>
@@ -471,7 +559,7 @@ async function inscrever(aluno, mats, aoConcluir) {
 
   function atualizar() {
     const a = livres.find((x) => x.id === form.aula.value);
-    const marcado = form.plano?.value || 'mensal';
+    const marcado = form.plano?.value || preset.plano || 'mensal';
     m.el.querySelector('#planos').innerHTML = Object.keys(PLANOS).map((p) => `
       <label class="check" style="margin:0;border:1.5px solid var(--borda);border-radius:10px;padding:10px 12px;font-weight:600">
         <input type="radio" name="plano" value="${p}" ${p === marcado ? 'checked' : ''}>
@@ -483,6 +571,9 @@ async function inscrever(aluno, mats, aoConcluir) {
       ? `<div class="aviso alerta">Esta turma está cheia ou com fila: o aluno entrará na <strong>lista de espera</strong> (posição ${o.espera + 1}) e será chamado por ordem de reserva.</div>` : '';
     const semPreco = Object.keys(PLANOS).some((p) => preco(a, p) === null);
     if (semPreco) m.el.querySelector('#aviso-vaga').insertAdjacentHTML('beforeend', '<div class="aviso info">Alguns planos desta aula estão sem preço. Defina os preços na tela de Aulas antes de cobrar.</div>');
+  }
+  if (preset.aula_id && !livres.some((a) => a.id === preset.aula_id)) {
+    m.el.querySelector('#aviso-vaga').insertAdjacentHTML('beforebegin', '<div class="aviso alerta">A aula pedida pelo aluno não está disponível (oculta ou já inscrito). Escolha outra ou recuse o pedido.</div>');
   }
   form.aula.addEventListener('change', atualizar);
   atualizar();

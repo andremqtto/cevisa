@@ -12,6 +12,7 @@ const ROTULOS = {
   vaga_liberada: 'Vaga liberada',
   vence_em_breve: 'Vence em breve',
   pagamento_informado: 'Pagamento informado',
+  inscricao_solicitada: 'Pedido de inscrição',
 };
 
 export function iniciarNotificacoes(host, { navegar }) {

@@ -18,7 +18,13 @@ export async function renderHome(el, { isGestor, logado = false }) {
     } else {
       aulas = ok(await sb.from('aulas_publicas').select('*'));
     }
-    desenhar(el, aulas, ocupacao, { isGestor, logado });
+    // Aluno logado: saber em quais aulas já está inscrito ou já pediu inscrição.
+    let alunos = null;
+    if (logado) {
+      const r = await sb.rpc('painel_aluno');
+      alunos = r.error ? null : r.data;
+    }
+    desenhar(el, aulas, ocupacao, { isGestor, logado, alunos });
   } catch (e) {
     el.innerHTML = erroBox(e);
   }
@@ -33,13 +39,18 @@ function desenhar(el, aulas, ocupacao, ctx) {
     </section>
     ${isGestor ? '<div class="aviso info no-print">Você está logado como gestor: pode editar as aulas, os preços e as fotos. As vagas só aparecem para você.</div>' : ''}
     <div class="grade-aulas">
-      ${aulas.map((a) => cartao(a, ocupacao[a.id], isGestor)).join('')}
+      ${aulas.map((a) => cartao(a, ocupacao[a.id], isGestor, ctx.alunos)).join('')}
       ${isGestor ? '<button class="nova-aula" data-nova type="button">＋ Nova aula</button>' : ''}
     </div>
     ${!aulas.length && !isGestor ? vazio('Em breve, novas aulas por aqui.') : ''}
-    ${!isGestor ? `<p class="sub" style="margin-top:28px">Para se inscrever${ctx.logado ? ' em outra aula' : ''}, procure a recepção do Spa Médico Adventista Cevisa.</p>` : ''}`;
+    ${!isGestor && !ctx.alunos ? '<p class="sub" style="margin-top:28px">Para se inscrever, procure a recepção do Spa Médico Adventista Cevisa ou entre no app.</p>' : ''}`;
 
-  el.onclick = (e) => {
+  el.onclick = async (e) => {
+    const pedir = e.target.closest('[data-pedir]');
+    if (pedir) {
+      const { abrirPedidoInscricao } = await import('./aluno.js');
+      return abrirPedidoInscricao(aulas.find((a) => a.id === pedir.dataset.pedir), ctx.alunos, () => renderHome(el, ctx));
+    }
     const b = e.target.closest('[data-nova],[data-editar],[data-turma]');
     if (!b) return;
     if (b.hasAttribute('data-nova')) return editarAula(null, () => renderHome(el, ctx));
@@ -54,7 +65,22 @@ function precoBox(rotulo, valor, meses) {
   return `<div class="preco"><span>${rotulo}</span><strong>${valor === null || valor === undefined ? 'Consulte' : money(valor)}</strong><small>${porMes}</small></div>`;
 }
 
-function cartao(a, oc, isGestor) {
+/** Situação do aluno (ou alunos do mesmo responsável) nesta aula: botão de inscrição ou selo. */
+function inscricaoAluno(a, alunos) {
+  if (!alunos) return '';
+  const estados = alunos.map((al) => {
+    const m = al.matriculas.find((x) => x.aula_id === a.id);
+    if (m) return m.status === 'espera' ? 'espera' : 'inscrito';
+    return al.solicitacoes?.some((s) => s.aula_id === a.id) ? 'pedido' : 'livre';
+  });
+  if (estados.includes('livre')) {
+    return `<button class="btn" type="button" data-pedir="${a.id}" style="width:100%">Quero me inscrever</button>`;
+  }
+  const selo = { inscrito: ['ok', 'Você está inscrito(a)'], espera: ['alerta', 'Você está na lista de espera'], pedido: ['alerta', 'Pedido enviado · aguardando a recepção'] }[estados[0]];
+  return `<div class="inscricao-selo"><span class="badge ${selo[0]}">${selo[1]}</span></div>`;
+}
+
+function cartao(a, oc, isGestor, alunos) {
   const foto = a.foto_url
     ? `<img src="${esc(a.foto_url)}" alt="Foto da aula de ${esc(a.nome)}" loading="lazy">`
     : `<span class="inicial" aria-hidden="true">${esc(a.nome.charAt(0))}</span>`;
@@ -72,6 +98,7 @@ function cartao(a, oc, isGestor) {
           ${precoBox('Semestral', a.preco_semestral, 6)}
           ${precoBox('Anual', a.preco_anual, 12)}
         </div>
+        ${inscricaoAluno(a, alunos)}
         ${isGestor ? `
           <div class="vagas-gestor no-print">
             <span class="badge ${cheia ? 'erro' : 'ok'}">${o.ativa}/${a.vagas} vagas</span>

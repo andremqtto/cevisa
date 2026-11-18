@@ -232,6 +232,19 @@ td.num, th.num { text-align: right; white-space: nowrap; }
 .link { background: none; border: 0; padding: 4px 2px; color: var(--azul); font-weight: 700; text-decoration: underline; cursor: pointer; }
 .login-troca { text-align: center; margin: 16px 0 0; color: var(--suave); font-size: 15px; }
 
+/* ------------------------------------------------------------ pedidos de inscrição */
+.plano-opcao { margin: 0; border: 1.5px solid var(--borda); border-radius: 10px; padding: 10px 12px; font-weight: 600; cursor: pointer; }
+.plano-opcao:has(input:checked) { border-color: var(--azul); background: var(--azul-fundo); }
+.plano-opcao span { flex: 1; }
+.plano-opcao small { display: block; font-weight: 500; color: var(--suave); font-size: 13px; }
+.plano-opcao strong { color: var(--azul); white-space: nowrap; }
+.inscricao-selo { text-align: center; }
+.pedidos { border-color: #f3d39b; background: #fffbf2; }
+
+/* ------------------------------------------------------------ zona de perigo */
+.zona-perigo { border-color: #f1c3bf; background: #fffafa; }
+.zona-perigo > h2 { color: var(--erro); }
+
 /* ------------------------------------------------------------ primeiro acesso */
 .primeiro-acesso { max-width: 640px; margin: 0 auto; }
 .primeiro-acesso > h1 { font-size: 28px; }

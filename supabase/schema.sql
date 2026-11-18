@@ -141,10 +141,25 @@ create table if not exists public.convites_admin (
   created_at timestamptz not null default now()
 );
 
--- Novo tipo de notificação: aluno avisou que pagou.
+-- Pedidos de inscrição feitos pelo aluno no app (o gestor/admin conclui a inscrição).
+create table if not exists public.solicitacoes_inscricao (
+  id           uuid primary key default gen_random_uuid(),
+  aluno_id     uuid not null references public.alunos(id) on delete cascade,
+  aula_id      uuid not null references public.aulas(id)  on delete cascade,
+  plano        text not null check (plano in ('mensal','semestral','anual')),
+  observacao   text,
+  status       text not null default 'pendente' check (status in ('pendente','concluida','recusada')),
+  resolvida_em timestamptz,
+  created_at   timestamptz not null default now()
+);
+create unique index if not exists solicitacoes_uma_pendente
+  on public.solicitacoes_inscricao (aluno_id, aula_id) where status = 'pendente';
+
+-- Novos tipos de notificação: aluno avisou que pagou / aluno pediu inscrição.
+alter table public.notificacoes add column if not exists solicitacao_id uuid references public.solicitacoes_inscricao(id) on delete cascade;
 alter table public.notificacoes drop constraint if exists notificacoes_tipo_check;
 alter table public.notificacoes add constraint notificacoes_tipo_check
-  check (tipo in ('vence_em_breve','vencido','vaga_liberada','pagamento_informado'));
+  check (tipo in ('vence_em_breve','vencido','vaga_liberada','pagamento_informado','inscricao_solicitada'));
 
 -- Se o gestor trocar o e-mail do aluno, o acesso antigo deixa de valer.
 create or replace function public._tg_alunos_email()
@@ -187,6 +202,12 @@ set search_path = public
 as $$
   select exists (select 1 from public.gestores where user_id = auth.uid() and papel = 'gestor');
 $$;
+
+alter table public.solicitacoes_inscricao enable row level security;
+drop policy if exists solic_gestor on public.solicitacoes_inscricao;
+create policy solic_gestor on public.solicitacoes_inscricao for all to authenticated
+  using (public.is_gestor()) with check (public.is_gestor());
+grant select, update on public.solicitacoes_inscricao to authenticated; -- aluno só usa as funções abaixo
 
 alter table public.convites_admin enable row level security;
 drop policy if exists convites_principal on public.convites_admin;
@@ -374,6 +395,14 @@ begin
   values (p_aluno, p_aula, p_plano, v_status, coalesce(p_inicio, current_date), coalesce(p_inicio, current_date))
   returning id into v_id;
 
+  -- conclui o pedido de inscrição feito pelo aluno no app (se houver)
+  update public.notificacoes set lida = true
+   where tipo = 'inscricao_solicitada'
+     and solicitacao_id in (select id from public.solicitacoes_inscricao
+                             where aluno_id = p_aluno and aula_id = p_aula and status = 'pendente');
+  update public.solicitacoes_inscricao set status = 'concluida', resolvida_em = now()
+   where aluno_id = p_aluno and aula_id = p_aula and status = 'pendente';
+
   if v_status = 'ativa' then
     perform public._criar_cobranca(v_id);
     v_pos := null;
@@ -457,6 +486,37 @@ begin
   delete from public.trancamentos where id = t.id;
   update public.matriculas set data_fim = (data_fim - interval '1 month')::date where id = t.matricula_id;
 end $$;
+
+-- Exclui o aluno PERMANENTEMENTE: ficha, matrículas, pagamentos, trancamentos e notificações (cascade).
+-- Libera as vagas (chamando a lista de espera) e apaga o login do aluno, se ele não for da equipe
+-- e não tiver outras fichas (ex.: irmãos com o mesmo e-mail do responsável).
+create or replace function public.excluir_aluno(p_aluno uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_user uuid; v_aulas uuid[]; v_aula uuid;
+begin
+  if not public.is_gestor() then raise exception 'Acesso negado.'; end if;
+  select user_id into v_user from public.alunos where id = p_aluno for update;
+  if not found then raise exception 'Aluno não encontrado.'; end if;
+  select array_agg(distinct aula_id) into v_aulas
+    from public.matriculas where aluno_id = p_aluno and status = 'ativa';
+
+  delete from public.alunos where id = p_aluno;
+
+  if v_aulas is not null then
+    foreach v_aula in array v_aulas loop
+      perform public._promover_espera(v_aula);
+    end loop;
+  end if;
+
+  if v_user is not null
+     and not exists (select 1 from public.gestores where user_id = v_user)
+     and not exists (select 1 from public.alunos  where user_id = v_user) then
+    delete from auth.users where id = v_user;
+  end if;
+end $$;
+
+revoke all on function public.excluir_aluno(uuid) from public, anon;
+grant execute on function public.excluir_aluno(uuid) to authenticated;
 
 -- Relatório mensal.
 create or replace function public.relatorio_mensal(p_ano int, p_mes int)
@@ -543,7 +603,7 @@ begin
            'id', a.id, 'nome', a.nome, 'ativo', a.ativo, 'cadastro_completo', a.cadastro_completo,
            'matriculas', coalesce((
               select jsonb_agg(jsonb_build_object(
-                       'id', m.id, 'status', m.status, 'plano', m.plano,
+                       'id', m.id, 'aula_id', m.aula_id, 'status', m.status, 'plano', m.plano,
                        'data_inicio', m.data_inicio, 'data_fim', m.data_fim,
                        'aula', au.nome, 'horarios', au.horarios,
                        'preco', public._preco_do_plano(m.aula_id, m.plano),
@@ -554,6 +614,11 @@ begin
                      ) order by au.ordem, au.nome)
                 from public.matriculas m join public.aulas au on au.id = m.aula_id
                where m.aluno_id = a.id and m.status in ('ativa','espera')), '[]'::jsonb),
+           'solicitacoes', coalesce((
+              select jsonb_agg(jsonb_build_object('id', s.id, 'aula_id', s.aula_id, 'aula', au.nome,
+                                                  'plano', s.plano, 'created_at', s.created_at) order by s.created_at)
+                from public.solicitacoes_inscricao s join public.aulas au on au.id = s.aula_id
+               where s.aluno_id = a.id and s.status = 'pendente'), '[]'::jsonb),
            'ultimo_pagamento', (select max(pago_em) from public.pagamentos where aluno_id = a.id and status = 'pago'),
            'pagamento_informado_em', (select max(created_at) from public.notificacoes
                                        where aluno_id = a.id and tipo = 'pagamento_informado')
@@ -700,6 +765,51 @@ begin
    where id = p_aluno and user_id = auth.uid();
   if not found then raise exception 'Cadastro não encontrado.'; end if;
 end $$;
+
+-- Aluno pede inscrição numa aula; o gestor/admin recebe uma notificação no sino.
+create or replace function public.solicitar_inscricao(p_aluno uuid, p_aula uuid, p_plano text, p_obs text default null)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare v_nome text; v_aula text; v_id uuid;
+begin
+  if auth.uid() is null then raise exception 'Acesso negado.'; end if;
+  select nome into v_nome from public.alunos where id = p_aluno and user_id = auth.uid();
+  if not found then raise exception 'Aluno não encontrado.'; end if;
+  if p_plano not in ('mensal','semestral','anual') then raise exception 'Plano inválido.'; end if;
+  select nome into v_aula from public.aulas where id = p_aula and ativa;
+  if not found then raise exception 'Aula não encontrada.'; end if;
+  if exists (select 1 from public.matriculas where aluno_id = p_aluno and aula_id = p_aula and status in ('ativa','espera')) then
+    raise exception 'Você já está inscrito(a) nesta aula.';
+  end if;
+  if exists (select 1 from public.solicitacoes_inscricao where aluno_id = p_aluno and aula_id = p_aula and status = 'pendente') then
+    raise exception 'Você já pediu inscrição nesta aula. Aguarde a recepção.';
+  end if;
+
+  insert into public.solicitacoes_inscricao (aluno_id, aula_id, plano, observacao)
+  values (p_aluno, p_aula, p_plano, left(nullif(trim(p_obs), ''), 300))
+  returning id into v_id;
+
+  insert into public.notificacoes (tipo, aluno_id, solicitacao_id, referencia, mensagem)
+  values ('inscricao_solicitada', p_aluno, v_id, current_date,
+          v_nome || ' pediu inscrição em ' || v_aula || ' (plano ' || p_plano || ').'
+          || coalesce(' Obs.: ' || left(nullif(trim(p_obs), ''), 300), '')
+          || ' Toque para abrir a ficha e inscrever.');
+  return v_id;
+end $$;
+
+-- Gestor/admin recusa um pedido de inscrição.
+create or replace function public.recusar_solicitacao(p_solicitacao uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_gestor() then raise exception 'Acesso negado.'; end if;
+  update public.solicitacoes_inscricao set status = 'recusada', resolvida_em = now()
+   where id = p_solicitacao and status = 'pendente';
+  update public.notificacoes set lida = true where solicitacao_id = p_solicitacao;
+end $$;
+
+revoke all on function public.solicitar_inscricao(uuid, uuid, text, text) from public, anon;
+revoke all on function public.recusar_solicitacao(uuid)                   from public, anon;
+grant execute on function public.solicitar_inscricao(uuid, uuid, text, text) to authenticated;
+grant execute on function public.recusar_solicitacao(uuid)                   to authenticated;
 
 -- Uso interno da Edge Function: acha o usuário pelo e-mail.
 create or replace function public._usuario_por_email(p_email text)
