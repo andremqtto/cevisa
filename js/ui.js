@@ -204,9 +204,17 @@ document.addEventListener('focusin', (e) => {
   docEl.classList.add('digitando');
   mostrarCampo(e.target);
 });
-document.addEventListener('focusout', () => {
-  setTimeout(() => { if (!ehCampoTexto(document.activeElement)) docEl.classList.remove('digitando'); }, 120);
-});
+// Tira o modo "digitando" quando nenhum campo de texto está em foco. Precisa ser checado em vários
+// momentos: se o campo some da tela (ex.: o modal de login fecha), o navegador não avisa com focusout.
+export function conferirDigitando() {
+  if (!ehCampoTexto(document.activeElement) || !document.activeElement.isConnected) docEl.classList.remove('digitando');
+}
+document.addEventListener('focusout', () => setTimeout(conferirDigitando, 120));
+['pointerdown', 'hashchange'].forEach((ev) => window.addEventListener(ev, () => setTimeout(conferirDigitando, 150)));
+new MutationObserver(() => {
+  if (docEl.classList.contains('digitando')) conferirDigitando();
+}).observe(document.body, { childList: true });
+if (vv) vv.addEventListener('resize', () => setTimeout(conferirDigitando, 150));
 
 // ---------------------------------------------------------------- WhatsApp e horários
 /** Link wa.me para o número configurado em config.js, ou null se ainda não houver número. */
