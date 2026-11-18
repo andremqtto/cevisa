@@ -99,10 +99,10 @@ export async function renderRelatorios(el) {
 
   // ---------------------------------------------------------------- Modalidades
   function modalidades(r) {
-    const mods = (r.modalidades || []).filter((x) =>
-      x.alunos_ativos || x.na_espera || x.novas_matriculas || Number(x.recebido) || Number(x.a_receber) || Number(x.diarias));
+    // Todas as modalidades (aulas) aparecem, mesmo as que ainda não têm valores no mês.
+    const mods = r.modalidades || [];
     const semMod = Number(r.diarias_sem_modalidade || 0);
-    if (!mods.length && !semMod) return vazio('Nenhum movimento por modalidade neste mês.');
+    if (!mods.length && !semMod) return vazio('Nenhuma modalidade cadastrada. Crie as aulas na tela inicial.');
     const soma = (k) => mods.reduce((s, x) => s + Number(x[k] || 0), 0);
     const maior = Math.max(1, ...mods.map((x) => Number(x.recebido) + Number(x.diarias)));
     return `
