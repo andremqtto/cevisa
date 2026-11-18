@@ -1,4 +1,4 @@
-// Tela inicial: aulas e preços (pública). Gestores editam tudo aqui.
+// Tela inicial: aulas, turmas e preços (pública). Gestores editam tudo aqui.
 import { sb, ok } from './supabase.js';
 import { esc, money, abrirModal, toast, confirmar, comBotao, carregando, vazio, erroBox, planoLabel, horariosHTML } from './ui.js';
 
@@ -7,39 +7,47 @@ const FOTO_MAX = 5 * 1024 * 1024;
 export async function renderHome(el, { isGestor, logado = false }) {
   el.innerHTML = carregando('Carregando aulas…');
   try {
-    let aulas, ocupacao = {};
+    let aulas, turmas = [];
+    const ocupacao = {};   // por aula: { ativa, espera } das matrículas SEM turma
+    const ocTurma = {};    // por turma: { ativa, espera }
     if (isGestor) {
       aulas = ok(await sb.from('aulas').select('*').order('ordem').order('nome'));
-      const mats = ok(await sb.from('matriculas').select('aula_id,status').in('status', ['ativa', 'espera']));
+      const mats = ok(await sb.from('matriculas').select('aula_id,turma_id,status').in('status', ['ativa', 'espera']));
       for (const m of mats) {
-        const o = (ocupacao[m.aula_id] ??= { ativa: 0, espera: 0 });
+        const o = m.turma_id ? (ocTurma[m.turma_id] ??= { ativa: 0, espera: 0 }) : (ocupacao[m.aula_id] ??= { ativa: 0, espera: 0 });
         o[m.status]++;
       }
+      const rt = await sb.from('turmas').select('*').order('ordem').order('nome');
+      turmas = rt.error ? [] : rt.data;   // banco ainda sem turmas: segue sem elas
     } else {
       aulas = ok(await sb.from('aulas_publicas').select('*'));
+      const rt = await sb.from('turmas_publicas').select('*');
+      turmas = rt.error ? [] : rt.data;
     }
+    const turmasDa = (id) => turmas.filter((t) => t.aula_id === id);
     // Aluno logado: saber em quais aulas já está inscrito ou já pediu inscrição.
     let alunos = null;
     if (logado) {
       const r = await sb.rpc('painel_aluno');
       alunos = r.error ? null : r.data;
     }
-    desenhar(el, aulas, ocupacao, { isGestor, logado, alunos });
+    desenhar(el, aulas, { isGestor, logado, alunos, ocupacao, ocTurma, turmasDa });
   } catch (e) {
     el.innerHTML = erroBox(e);
   }
 }
 
-function desenhar(el, aulas, ocupacao, ctx) {
+function desenhar(el, aulas, ctx) {
   const { isGestor } = ctx;
+  const recarregar = () => renderHome(el, { isGestor, logado: ctx.logado });
   el.innerHTML = `
     <section class="hero">
       <h1>Nossas aulas</h1>
       <p class="sub">Conheça as modalidades do Spa Médico Adventista Cevisa e escolha a sua.</p>
     </section>
-    ${isGestor ? '<div class="aviso info no-print">Você está logado como gestor: pode editar as aulas, os preços e as fotos. As vagas só aparecem para você.</div>' : ''}
+    ${isGestor ? '<div class="aviso info no-print">Você está logado como gestor: pode editar as aulas, turmas, preços e fotos. As vagas só aparecem para você.</div>' : ''}
     <div class="grade-aulas">
-      ${aulas.map((a) => cartao(a, ocupacao[a.id], isGestor, ctx.alunos)).join('')}
+      ${aulas.map((a) => cartao(a, ctx)).join('')}
       ${isGestor ? '<button class="nova-aula" data-nova type="button">＋ Nova aula</button>' : ''}
     </div>
     ${!aulas.length && !isGestor ? vazio('Em breve, novas aulas por aqui.') : ''}
@@ -48,25 +56,30 @@ function desenhar(el, aulas, ocupacao, ctx) {
   el.onclick = async (e) => {
     const pedir = e.target.closest('[data-pedir]');
     if (pedir) {
+      const aula = aulas.find((a) => a.id === pedir.dataset.pedir);
       const { abrirPedidoInscricao } = await import('./aluno.js');
-      return abrirPedidoInscricao(aulas.find((a) => a.id === pedir.dataset.pedir), ctx.alunos, () => renderHome(el, ctx));
+      return abrirPedidoInscricao(aula, ctx.turmasDa(aula.id), ctx.alunos, recarregar);
     }
-    const b = e.target.closest('[data-nova],[data-editar],[data-turma]');
+    const b = e.target.closest('[data-nova],[data-editar],[data-turma],[data-turmas]');
     if (!b) return;
-    if (b.hasAttribute('data-nova')) return editarAula(null, () => renderHome(el, ctx));
-    const aula = aulas.find((a) => a.id === (b.dataset.editar || b.dataset.turma));
-    if (b.dataset.editar) editarAula(aula, () => renderHome(el, ctx));
-    else verTurma(aula);
+    if (b.hasAttribute('data-nova')) return editarAula(null, recarregar);
+    const aula = aulas.find((a) => a.id === (b.dataset.editar || b.dataset.turma || b.dataset.turmas));
+    if (b.dataset.editar) editarAula(aula, recarregar);
+    else if (b.dataset.turmas) gerenciarTurmas(aula, recarregar);
+    else verAlunos(aula, ctx.turmasDa(aula.id));
   };
 }
 
-function precoBox(rotulo, valor, meses) {
+function precoBox(rotulo, valor, meses, extra = '') {
   const porMes = valor && meses > 1 ? `${money(valor / meses)}/mês` : '';
-  return `<div class="preco"><span>${rotulo}</span><strong>${valor === null || valor === undefined ? 'Consulte' : money(valor)}</strong><small>${porMes}</small></div>`;
+  return `<div class="preco ${extra}"><span>${rotulo}</span><strong>${valor === null || valor === undefined ? 'Consulte' : money(valor)}</strong><small>${porMes}</small></div>`;
 }
 
-/** Situação do aluno (ou alunos do mesmo responsável) nesta aula: botão de inscrição ou selo. */
-function inscricaoAluno(a, alunos) {
+/** Aula sem vaga para novos alunos? (todas as turmas cheias, ou a aula cheia se não tiver turmas) */
+const aulaLotada = (a, turmas) => (turmas.length ? turmas.every((t) => t.lotada) : !!a.lotada);
+
+/** Situação do aluno (ou alunos do mesmo responsável) nesta aula: botão de inscrição/fila ou selo. */
+function inscricaoAluno(a, turmas, alunos) {
   if (!alunos) return '';
   const estados = alunos.map((al) => {
     const m = al.matriculas.find((x) => x.aula_id === a.id);
@@ -74,17 +87,38 @@ function inscricaoAluno(a, alunos) {
     return al.solicitacoes?.some((s) => s.aula_id === a.id) ? 'pedido' : 'livre';
   });
   if (estados.includes('livre')) {
-    return `<button class="btn" type="button" data-pedir="${a.id}" style="width:100%">Quero me inscrever</button>`;
+    return aulaLotada(a, turmas)
+      ? `<button class="btn amarelo largo" type="button" data-pedir="${a.id}">Fila de espera</button>`
+      : `<button class="btn largo" type="button" data-pedir="${a.id}">Fazer inscrição</button>`;
   }
   const selo = { inscrito: ['ok', 'Você está inscrito(a)'], espera: ['alerta', 'Você está na lista de espera'], pedido: ['alerta', 'Pedido enviado · aguardando a recepção'] }[estados[0]];
   return `<div class="inscricao-selo"><span class="badge ${selo[0]}">${selo[1]}</span></div>`;
 }
 
-function cartao(a, oc, isGestor, alunos) {
+/** Turmas no cartão: nome, horários e características. Gestor vê as vagas de cada uma. */
+function turmasHTML(turmas, ctx) {
+  return `<div class="turmas-lista">${turmas.map((t) => {
+    const o = ctx.ocTurma[t.id] || { ativa: 0, espera: 0 };
+    const lotada = ctx.isGestor ? o.ativa >= t.vagas : t.lotada;
+    const info = ctx.isGestor
+      ? `<span class="badge ${lotada ? 'erro' : 'ok'}">${o.ativa}/${t.vagas}</span>${o.espera ? ` <span class="badge alerta">${o.espera} na fila</span>` : ''}${t.ativa ? '' : ' <span class="badge cinza">Oculta</span>'}`
+      : lotada ? '<span class="badge cinza">Sem vagas</span>' : '';
+    return `
+      <div class="turma-item ${lotada && !ctx.isGestor ? 'lotada' : ''}">
+        <div class="turma-nome"><strong>${esc(t.nome)}</strong><span>${info}</span></div>
+        ${horariosHTML(t.horarios)}
+        ${t.descricao ? `<small>${esc(t.descricao)}</small>` : ''}
+      </div>`;
+  }).join('')}</div>`;
+}
+
+function cartao(a, ctx) {
+  const { isGestor } = ctx;
+  const turmas = ctx.turmasDa(a.id);
   const foto = a.foto_url
     ? `<img src="${esc(a.foto_url)}" alt="Foto da aula de ${esc(a.nome)}" loading="lazy">`
     : `<span class="inicial" aria-hidden="true">${esc(a.nome.charAt(0))}</span>`;
-  const o = oc || { ativa: 0, espera: 0 };
+  const o = ctx.ocupacao[a.id] || { ativa: 0, espera: 0 };
   const cheia = isGestor && o.ativa >= a.vagas;
   return `
     <article class="aula ${isGestor && !a.ativa ? 'oculta' : ''}">
@@ -92,54 +126,165 @@ function cartao(a, oc, isGestor, alunos) {
       <div class="aula-corpo">
         <h2>${esc(a.nome)}</h2>
         ${a.descricao ? `<p>${esc(a.descricao)}</p>` : ''}
-        ${horariosHTML(a.horarios)}
+        ${turmas.length ? turmasHTML(turmas, ctx) : horariosHTML(a.horarios)}
         <div class="precos">
           ${precoBox('Mensal', a.preco_mensal, 1)}
           ${precoBox('Semestral', a.preco_semestral, 6)}
           ${precoBox('Anual', a.preco_anual, 12)}
+          ${precoBox('Diária', a.preco_diaria, 1, 'diaria')}
         </div>
-        ${inscricaoAluno(a, alunos)}
+        ${inscricaoAluno(a, turmas, ctx.alunos)}
         ${isGestor ? `
+          ${turmas.length ? '' : `
           <div class="vagas-gestor no-print">
             <span class="badge ${cheia ? 'erro' : 'ok'}">${o.ativa}/${a.vagas} vagas</span>
-            <span>${cheia ? 'Turma cheia · ' : ''}${o.espera} na lista de espera</span>
-          </div>
+            <span>${cheia ? 'Aula cheia · ' : ''}${o.espera} na lista de espera</span>
+          </div>`}
           <div class="aula-acoes no-print">
-            <button class="btn sec pequeno" data-turma="${a.id}" type="button">Ver turma</button>
+            <button class="btn sec pequeno" data-turma="${a.id}" type="button">Ver alunos</button>
+            <button class="btn sec pequeno" data-turmas="${a.id}" type="button">Turmas${turmas.length ? ` (${turmas.length})` : ''}</button>
             <button class="btn pequeno" data-editar="${a.id}" type="button">Editar</button>
           </div>` : ''}
       </div>
     </article>`;
 }
 
-// ------------------------------------------------------------------ turma
-async function verTurma(aula) {
-  const m = abrirModal({ titulo: `Turma — ${aula.nome}`, largura: 560, corpo: carregando() });
+// ------------------------------------------------------------------ alunos da aula (por turma)
+async function verAlunos(aula, turmas) {
+  const m = abrirModal({ titulo: `Alunos — ${aula.nome}`, largura: 560, corpo: carregando() });
   try {
     const mats = ok(await sb.from('matriculas')
-      .select('id,status,plano,created_at,alunos(id,nome,ativo)')
+      .select('id,status,plano,turma_id,created_at,alunos(id,nome,ativo)')
       .eq('aula_id', aula.id).in('status', ['ativa', 'espera']).order('created_at'));
-    const ativos = mats.filter((x) => x.status === 'ativa');
-    const espera = mats.filter((x) => x.status === 'espera');
     const lista = (arr, fila) => arr.length
-      ? `<ol style="margin:0;padding-left:${fila ? 22 : 22}px">${arr.map((x) => `
+      ? `<ol style="margin:0;padding-left:22px">${arr.map((x) => `
           <li style="margin:5px 0"><a href="#/alunos/${x.alunos.id}" data-ir>${esc(x.alunos.nome)}</a>
           <span class="badge">${planoLabel(x.plano)}</span>${x.alunos.ativo ? '' : ' <span class="badge cinza">Desativado</span>'}</li>`).join('')}</ol>`
       : vazio(fila ? 'Ninguém na lista de espera.' : 'Nenhum aluno inscrito.');
-    m.el.innerHTML = `
-      <p><span class="badge ${ativos.length >= aula.vagas ? 'erro' : 'ok'}">${ativos.length}/${aula.vagas} vagas ocupadas</span></p>
-      <h3 style="margin:14px 0 6px">Alunos inscritos</h3>${lista(ativos, false)}
-      <h3 style="margin:18px 0 6px">Lista de espera (por ordem de reserva)</h3>${lista(espera, true)}`;
+    const grupo = (titulo, vagas, doGrupo) => {
+      const ativos = doGrupo.filter((x) => x.status === 'ativa');
+      const espera = doGrupo.filter((x) => x.status === 'espera');
+      return `
+        <section class="grupo-turma">
+          <h3>${esc(titulo)} <span class="badge ${ativos.length >= vagas ? 'erro' : 'ok'}">${ativos.length}/${vagas} vagas</span></h3>
+          <h4>Inscritos</h4>${lista(ativos, false)}
+          <h4>Lista de espera (por ordem de reserva)</h4>${lista(espera, true)}
+        </section>`;
+    };
+    const semTurma = mats.filter((x) => !x.turma_id);
+    m.el.innerHTML = turmas.length
+      ? turmas.map((t) => grupo(t.nome, t.vagas, mats.filter((x) => x.turma_id === t.id))).join('')
+        + (semTurma.length ? grupo('Sem turma definida', aula.vagas, semTurma)
+          + '<p class="sub">Abra a ficha desses alunos e use “Trocar turma” para colocá-los numa turma.</p>' : '')
+      : grupo(aula.nome, aula.vagas, mats);
     m.el.addEventListener('click', (e) => { if (e.target.closest('[data-ir]')) m.fechar(); });
   } catch (e) {
     m.el.innerHTML = erroBox(e);
   }
 }
 
+// ------------------------------------------------------------------ turmas (gestor)
+function gerenciarTurmas(aula, aoMudar) {
+  let mudou = false;
+  const m = abrirModal({ titulo: `Turmas — ${aula.nome}`, largura: 580, corpo: carregando(), aoFechar: () => { if (mudou) aoMudar(); } });
+
+  async function listar() {
+    m.el.innerHTML = carregando();
+    let turmas, oc = {};
+    try {
+      turmas = ok(await sb.from('turmas').select('*').eq('aula_id', aula.id).order('ordem').order('nome'));
+      const mats = ok(await sb.from('matriculas').select('turma_id,status').eq('aula_id', aula.id).in('status', ['ativa', 'espera']));
+      for (const x of mats) if (x.turma_id) (oc[x.turma_id] ??= { ativa: 0, espera: 0 })[x.status]++;
+    } catch (e) { m.el.innerHTML = erroBox(e); return; }
+    m.el.innerHTML = `
+      <p class="sub" style="margin-top:0">Cada turma tem seus horários, características e vagas. Os alunos veem as turmas no cartão da aula
+        e escolhem uma ao pedir inscrição. Turmas cheias aparecem em cinza.</p>
+      ${turmas.length ? `<ul class="lista-turmas">${turmas.map((t) => {
+        const o = oc[t.id] || { ativa: 0, espera: 0 };
+        return `<li>
+          <div><strong>${esc(t.nome)}</strong> ${t.ativa ? '' : '<span class="badge cinza">Oculta</span>'}
+            <span class="badge ${o.ativa >= t.vagas ? 'erro' : 'ok'}">${o.ativa}/${t.vagas} vagas</span>${o.espera ? ` <span class="badge alerta">${o.espera} na fila</span>` : ''}
+            ${t.horarios ? `<small>${esc(t.horarios).replace(/\n/g, ' · ')}</small>` : ''}
+            ${t.descricao ? `<small>${esc(t.descricao)}</small>` : ''}</div>
+          <button class="btn sec pequeno" type="button" data-editar-turma="${t.id}">Editar</button>
+        </li>`;
+      }).join('')}</ul>`
+        : '<div class="aviso info">Esta aula ainda não tem turmas: todos os alunos ficam juntos, com as vagas e os horários definidos em “Editar”.</div>'}
+      <div class="acoes">
+        <button class="btn sec" type="button" data-fechar-modal>Fechar</button>
+        <button class="btn" type="button" data-nova-turma>＋ Nova turma</button>
+      </div>`;
+    m.el.querySelector('[data-fechar-modal]').onclick = () => m.fechar();
+    m.el.querySelector('[data-nova-turma]').onclick = () => formulario(null, turmas.length);
+    m.el.querySelectorAll('[data-editar-turma]').forEach((b) => {
+      b.onclick = () => formulario(turmas.find((t) => t.id === b.dataset.editarTurma));
+    });
+  }
+
+  function formulario(turma, qtd = 0) {
+    const novo = !turma;
+    const t = turma || { nome: '', horarios: '', descricao: '', vagas: 10, ativa: true, ordem: qtd + 1 };
+    m.el.innerHTML = `
+      <form id="f-turma" novalidate>
+        <h3 style="margin:0 0 12px">${novo ? 'Nova turma' : `Editar turma — ${esc(t.nome)}`}</h3>
+        <label class="campo"><span>Nome da turma *</span><input type="text" name="nome" required maxlength="60" value="${esc(t.nome)}" placeholder="Ex.: Turma A — Manhã"></label>
+        <label class="campo"><span>Horários</span><textarea name="horarios" maxlength="400" rows="2" placeholder="Seg, Qua e Sex · 07h às 08h">${esc(t.horarios)}</textarea><small>Um horário por linha.</small></label>
+        <label class="campo"><span>Características</span><textarea name="descricao" maxlength="300" rows="2" placeholder="Ex.: iniciantes · 6 a 10 anos · prof. Ana">${esc(t.descricao)}</textarea><small>Nível, faixa etária, professor… Aparece para os alunos.</small></label>
+        <div class="grade2">
+          <label class="campo"><span>Vagas *</span><input type="number" name="vagas" min="0" step="1" required value="${t.vagas}"><small>Só a equipe vê este número.</small></label>
+          <label class="campo"><span>Ordem</span><input type="number" name="ordem" step="1" value="${t.ordem}"></label>
+        </div>
+        <label class="check"><input type="checkbox" name="ativa" ${t.ativa ? 'checked' : ''}> Mostrar esta turma aos alunos</label>
+        <div id="t-erro"></div>
+        <div class="acoes">
+          ${novo ? '' : '<button type="button" class="btn perigo sec esq" data-excluir>Excluir</button>'}
+          <button type="button" class="btn sec" data-voltar>Voltar</button>
+          <button type="submit" class="btn">Salvar turma</button>
+        </div>
+      </form>`;
+    const form = m.el.querySelector('#f-turma');
+    const erro = (x) => { m.el.querySelector('#t-erro').innerHTML = x ? `<div class="aviso erro">${esc(x)}</div>` : ''; };
+    m.el.querySelector('[data-voltar]').onclick = listar;
+    m.el.querySelector('[data-excluir]')?.addEventListener('click', async (e) => {
+      if (!(await confirmar(`Excluir a turma “${t.nome}”?`, { titulo: 'Excluir turma', confirmarTexto: 'Excluir', perigo: true }))) return;
+      await comBotao(e.currentTarget, async () => {
+        try {
+          ok(await sb.from('turmas').delete().eq('id', t.id));
+          mudou = true;
+          toast('Turma excluída.');
+          listar();
+        } catch (err) { erro(err.message); }
+      });
+    });
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const nome = form.nome.value.trim();
+      if (!nome) return erro('Informe o nome da turma.');
+      const vagas = Number(form.vagas.value);
+      if (!Number.isInteger(vagas) || vagas < 0) return erro('Vagas deve ser um número inteiro (0 ou mais).');
+      const limpa = (v) => v.split('\n').map((l) => l.trim()).filter(Boolean).join('\n') || null;
+      const dados = {
+        aula_id: aula.id, nome, vagas, ordem: Number(form.ordem.value) || 0, ativa: form.ativa.checked,
+        horarios: limpa(form.horarios.value), descricao: form.descricao.value.trim() || null,
+      };
+      await comBotao(form.querySelector('[type=submit]'), async () => {
+        try {
+          ok(novo ? await sb.from('turmas').insert(dados) : await sb.from('turmas').update(dados).eq('id', t.id));
+          mudou = true;
+          toast(novo ? 'Turma criada.' : 'Turma atualizada.');
+          listar();
+        } catch (err) { erro(err.message); }
+      });
+    });
+  }
+
+  listar();
+}
+
 // ------------------------------------------------------------------ editar / criar aula
 function editarAula(aula, aoSalvar) {
   const novo = !aula;
-  const a = aula || { nome: '', descricao: '', horarios: '', foto_url: null, preco_mensal: null, preco_semestral: null, preco_anual: null, vagas: 20, ativa: true, ordem: 0 };
+  const a = aula || { nome: '', descricao: '', horarios: '', foto_url: null, preco_mensal: null, preco_semestral: null, preco_anual: null, preco_diaria: null, vagas: 20, ativa: true, ordem: 0 };
   const m = abrirModal({
     titulo: novo ? 'Nova aula' : `Editar — ${a.nome}`,
     largura: 580,
@@ -147,15 +292,16 @@ function editarAula(aula, aoSalvar) {
       <form id="f-aula" novalidate>
         <label class="campo"><span>Nome da aula *</span><input type="text" name="nome" required maxlength="80" value="${esc(a.nome)}"></label>
         <label class="campo"><span>Descrição</span><textarea name="descricao" maxlength="400">${esc(a.descricao)}</textarea></label>
-        <label class="campo"><span>Horários</span><textarea name="horarios" maxlength="500" rows="3" placeholder="Seg, Qua e Sex · 07h às 08h&#10;Ter e Qui · 18h às 19h">${esc(a.horarios)}</textarea><small>Um horário por linha. Aparece para visitantes e no painel dos alunos.</small></label>
-        <div class="grade3">
+        <label class="campo"><span>Horários</span><textarea name="horarios" maxlength="500" rows="3" placeholder="Seg, Qua e Sex · 07h às 08h&#10;Ter e Qui · 18h às 19h">${esc(a.horarios)}</textarea><small>Um horário por linha. Aparece para visitantes e alunos. Se a aula tiver turmas, aparecem os horários de cada turma.</small></label>
+        <div class="grade2">
           <label class="campo"><span>Mensal (R$)</span><input type="number" name="preco_mensal" min="0" step="0.01" inputmode="decimal" value="${a.preco_mensal ?? ''}"></label>
           <label class="campo"><span>Semestral (R$)</span><input type="number" name="preco_semestral" min="0" step="0.01" inputmode="decimal" value="${a.preco_semestral ?? ''}"></label>
           <label class="campo"><span>Anual (R$)</span><input type="number" name="preco_anual" min="0" step="0.01" inputmode="decimal" value="${a.preco_anual ?? ''}"></label>
+          <label class="campo"><span>Diária (R$)</span><input type="number" name="preco_diaria" min="0" step="0.01" inputmode="decimal" value="${a.preco_diaria ?? ''}"></label>
         </div>
         <p class="sub" style="margin:-6px 0 14px">Semestral e anual são o valor <strong>total</strong> do plano. Deixe em branco para exibir “Consulte”.</p>
         <div class="grade2">
-          <label class="campo"><span>Vagas *</span><input type="number" name="vagas" min="0" step="1" required value="${a.vagas}"><small>Só gestores veem este número.</small></label>
+          <label class="campo"><span>Vagas *</span><input type="number" name="vagas" min="0" step="1" required value="${a.vagas}"><small>Só gestores veem. Se a aula tiver turmas, valem as vagas de cada turma.</small></label>
           <label class="campo"><span>Ordem na tela</span><input type="number" name="ordem" step="1" value="${a.ordem}"><small>Menor número aparece primeiro.</small></label>
         </div>
         <div class="campo">
@@ -211,7 +357,7 @@ function editarAula(aula, aoSalvar) {
     if (!nome) return erro('Informe o nome da aula.');
     const vagas = Number(form.vagas.value);
     if (!Number.isInteger(vagas) || vagas < 0) return erro('Vagas deve ser um número inteiro (0 ou mais).');
-    for (const n of ['preco_mensal', 'preco_semestral', 'preco_anual']) {
+    for (const n of ['preco_mensal', 'preco_semestral', 'preco_anual', 'preco_diaria']) {
       if (num(n) !== null && num(n) < 0) return erro('Os preços não podem ser negativos.');
     }
     erro('');
@@ -233,6 +379,7 @@ function editarAula(aula, aoSalvar) {
         preco_mensal: num('preco_mensal'),
         preco_semestral: num('preco_semestral'),
         preco_anual: num('preco_anual'),
+        preco_diaria: num('preco_diaria'),
         vagas,
         ordem: Number(form.ordem.value) || 0,
         ativa: form.ativa.checked,

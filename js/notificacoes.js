@@ -13,7 +13,10 @@ const ROTULOS = {
   vence_em_breve: 'Vence em breve',
   pagamento_informado: 'Pagamento informado',
   inscricao_solicitada: 'Pedido de inscrição',
+  comprovante_enviado: 'Comprovante enviado',
 };
+// Tipos que também aparecem como banner no topo da tela (o aluno está esperando uma resposta).
+const TIPOS_BANNER = ['pagamento_informado', 'comprovante_enviado'];
 
 export function iniciarNotificacoes(host, { navegar }) {
   pararNotificacoes({ manterBanners: true });
@@ -62,7 +65,7 @@ export function iniciarNotificacoes(host, { navegar }) {
     el.dataset.id = n.id;
     el.innerHTML = `
       <button class="banner-corpo" type="button">
-        <strong>Pagamento informado pelo aluno</strong>
+        <strong>${n.tipo === 'comprovante_enviado' ? 'Comprovante enviado pelo aluno' : 'Pagamento informado pelo aluno'}</strong>
         <span>${esc(n.mensagem)}</span>
         <small>Toque para abrir o painel do aluno</small>
       </button>
@@ -78,8 +81,8 @@ export function iniciarNotificacoes(host, { navegar }) {
 
   async function buscarBanners() {
     try {
-      const itens = ok(await sb.from('notificacoes').select('id,aluno_id,mensagem,created_at')
-        .eq('tipo', 'pagamento_informado').eq('lida', false).order('created_at').limit(5));
+      const itens = ok(await sb.from('notificacoes').select('id,tipo,aluno_id,mensagem,created_at')
+        .in('tipo', TIPOS_BANNER).eq('lida', false).order('created_at').limit(5));
       itens.forEach(mostrarBanner);
     } catch { /* tenta de novo no próximo ciclo */ }
   }
@@ -141,7 +144,7 @@ export function iniciarNotificacoes(host, { navegar }) {
   canal = sb.channel(`notificacoes-gestor-${Date.now()}`)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notificacoes' }, (p) => {
       atualizarContagem();
-      if (p.new?.tipo === 'pagamento_informado') mostrarBanner(p.new);
+      if (TIPOS_BANNER.includes(p.new?.tipo)) mostrarBanner(p.new);
     })
     .subscribe();
 

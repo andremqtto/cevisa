@@ -1,8 +1,8 @@
 // Painel do aluno: aulas contratadas, horários, valores, vencimento e aviso de pagamento.
-import { sb, ok } from './supabase.js';
+import { sb, ok, chamarFuncao } from './supabase.js';
 import {
   esc, money, fmtDate, planoLabel, PLANOS, hojeISO, diasEntre, abrirModal, toast, comBotao, carregando, vazio, erroBox,
-  linkWhatsApp, horariosHTML, ICONE_WHATSAPP,
+  horariosHTML,
 } from './ui.js';
 
 const DIAS_A_VISTA = 30; // mensalidades que vencem em até 30 dias entram no "total a pagar"
@@ -61,7 +61,7 @@ export async function renderPainelAluno(el) {
     </div>
 
     ${inativo ? '<div class="aviso alerta">Há um cadastro desativado. Fale com o gestor para regularizar.</div>' : ''}
-    ${alunos.flatMap((a) => (a.solicitacoes || []).map((s) => `<div class="aviso info">Pedido de inscrição em <strong>${esc(s.aula)}</strong> (plano ${planoLabel(s.plano)})${varios ? ` para ${esc(a.nome.split(' ')[0])}` : ''} enviado em ${fmtDate(s.created_at.slice(0, 10))}. Aguardando a recepção confirmar.</div>`)).join('')}
+    ${alunos.flatMap((a) => (a.solicitacoes || []).map((s) => `<div class="aviso info">Pedido de inscrição em <strong>${esc(s.aula)}${s.turma ? ` — ${esc(s.turma)}` : ''}</strong> (plano ${planoLabel(s.plano)})${varios ? ` para ${esc(a.nome.split(' ')[0])}` : ''} enviado em ${fmtDate(s.created_at.slice(0, 10))}. Aguardando a recepção confirmar.</div>`)).join('')}
     ${informado ? `<div class="aviso info">Você avisou o pagamento em ${fmtDate(informado.slice(0, 10))}. Assim que o gestor confirmar, este painel será atualizado.</div>` : ''}
 
     <section class="painel-resumo">
@@ -81,7 +81,7 @@ export async function renderPainelAluno(el) {
       </div>
       <div class="painel-botoes">
         <button class="btn claro" type="button" id="ja-paguei" ${itens.length ? '' : 'disabled'}>Já paguei</button>
-        <a class="btn sec-claro" id="falar" href="${esc(linkWhatsApp(`Olá! Sou ${alunos[0]?.nome || ''}, aluno(a) do Cevisa.`) || '#')}" target="_blank" rel="noopener">${ICONE_WHATSAPP}Falar com o gestor</a>
+        <button class="btn sec-claro" type="button" id="comprovante" ${alunos.length ? '' : 'disabled'}>${ICONE_CLIPE}Enviar comprovante</button>
       </div>
     </section>
 
@@ -90,10 +90,79 @@ export async function renderPainelAluno(el) {
       : `<div class="card">${vazio('Você ainda não está inscrito em nenhuma aula.')}<p style="text-align:center;margin:0 0 6px"><a class="btn" href="#/aulas">Ver aulas e me inscrever</a></p></div>`}`;
 
   el.querySelector('#ja-paguei').onclick = () => informarPagamento({ total, vencimento: vencimento || proximo, aPagar }, () => renderPainelAluno(el));
-  const falar = el.querySelector('#falar');
-  if (falar.getAttribute('href') === '#') {
-    falar.addEventListener('click', (e) => { e.preventDefault(); toast('O contato do gestor ainda não foi configurado. Procure a recepção.', 'erro'); });
-  }
+  el.querySelector('#comprovante').onclick = () => enviarComprovante(alunos);
+}
+
+// ------------------------------------------------------------------ comprovante
+const ICONE_CLIPE = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>';
+const TIPOS_COMPROVANTE = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic', 'image/heif': 'heif', 'application/pdf': 'pdf' };
+const COMPROVANTE_MAX = 10 * 1024 * 1024;
+
+/** Aluno escolhe a foto/arquivo do comprovante; vai para o Storage, avisa a equipe no sino e é enviado por e-mail. */
+function enviarComprovante(alunos) {
+  const m = abrirModal({
+    titulo: 'Enviar comprovante',
+    largura: 460,
+    corpo: `
+      <form id="f-comp" novalidate>
+        <p style="margin-top:0">Envie a foto ou o PDF do comprovante de pagamento. A recepção recebe na hora e confirma o pagamento.</p>
+        ${alunos.length > 1 ? `
+          <label class="campo"><span>Aluno</span>
+            <select name="aluno">${alunos.map((al) => `<option value="${al.id}">${esc(al.nome)}</option>`).join('')}</select></label>`
+          : `<input type="hidden" name="aluno" value="${alunos[0].id}">`}
+        <label class="arquivo-caixa">
+          <input type="file" name="arquivo" accept="image/*,application/pdf">
+          <span class="arquivo-texto">${ICONE_CLIPE}<strong>Escolher foto ou arquivo</strong><small>JPG, PNG ou PDF · até 10 MB</small></span>
+          <img class="arquivo-previa" alt="" hidden>
+        </label>
+        <label class="campo"><span>Observação (opcional)</span><textarea name="obs" maxlength="300" placeholder="Ex.: mensalidade de novembro, pago no Pix"></textarea></label>
+        <div id="c-erro"></div>
+        <div class="acoes">
+          <button class="btn sec" type="button" data-cancelar>Cancelar</button>
+          <button class="btn" type="submit" disabled>Enviar</button>
+        </div>
+      </form>`,
+  });
+  const form = m.el.querySelector('#f-comp');
+  const btn = form.querySelector('[type=submit]');
+  const erro = (t) => { m.el.querySelector('#c-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
+  m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
+
+  form.arquivo.addEventListener('change', () => {
+    const f = form.arquivo.files[0];
+    const previa = m.el.querySelector('.arquivo-previa');
+    const texto = m.el.querySelector('.arquivo-texto strong');
+    erro('');
+    previa.hidden = true;
+    btn.disabled = true;
+    if (!f) { texto.textContent = 'Escolher foto ou arquivo'; return; }
+    if (!TIPOS_COMPROVANTE[f.type]) { erro('Formato não aceito. Envie uma foto (JPG, PNG) ou um PDF.'); form.arquivo.value = ''; return; }
+    if (f.size > COMPROVANTE_MAX) { erro('O arquivo passa de 10 MB. Escolha um menor.'); form.arquivo.value = ''; return; }
+    texto.textContent = f.name;
+    if (f.type.startsWith('image/') && !/hei[cf]/.test(f.type)) { previa.src = URL.createObjectURL(f); previa.hidden = false; }
+    btn.disabled = false;
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = form.arquivo.files[0];
+    if (!f) return erro('Escolha o arquivo do comprovante.');
+    await comBotao(btn, async () => {
+      try {
+        const { data: { user } } = await sb.auth.getUser();
+        if (!user) throw new Error('Sua sessão expirou. Entre de novo.');
+        const caminho = `${user.id}/${crypto.randomUUID()}.${TIPOS_COMPROVANTE[f.type]}`;
+        ok(await sb.storage.from('comprovantes').upload(caminho, f, { contentType: f.type }));
+        const id = ok(await sb.rpc('registrar_comprovante', {
+          p_aluno: form.aluno.value, p_arquivo: caminho, p_nome: f.name, p_obs: form.obs.value,
+        }));
+        // O e-mail é um extra: se falhar, a equipe já foi avisada no app.
+        try { await chamarFuncao('enviar-comprovante', { comprovante_id: id }); } catch (err) { console.warn('enviar-comprovante:', err.message); }
+        m.fechar();
+        toast('Comprovante enviado! A recepção vai conferir.');
+      } catch (err) { erro(err.message); }
+    });
+  });
 }
 
 function cartaoAula(aluno, m, item, varios, hoje) {
@@ -109,6 +178,7 @@ function cartaoAula(aluno, m, item, varios, hoje) {
         <h3>${esc(m.aula)}</h3>
         ${espera ? '<span class="badge alerta">Lista de espera</span>' : `<span class="badge">${planoLabel(m.plano)}</span>`}
       </header>
+      ${m.turma ? `<p class="sub" style="margin:0">Turma: <strong>${esc(m.turma)}</strong></p>` : ''}
       ${varios ? `<p class="sub" style="margin:0">Aluno: <strong>${esc(aluno.nome)}</strong></p>` : ''}
       ${horariosHTML(m.horarios) || '<p class="sub" style="margin:0">Horários a confirmar com a recepção.</p>'}
       <dl class="linhas">
@@ -121,20 +191,41 @@ function cartaoAula(aluno, m, item, varios, hoje) {
 }
 
 // ------------------------------------------------------------------ pedido de inscrição
-/** Aluno escolhe o plano e pede inscrição; o gestor/admin recebe uma notificação e conclui a inscrição. */
-export function abrirPedidoInscricao(aula, alunos, aoConcluir) {
+/**
+ * Aluno escolhe a turma e o plano e pede inscrição; o gestor/admin recebe uma notificação e conclui a inscrição.
+ * turmas: turmas_publicas desta aula. Turmas sem vaga ficam cinza e não podem ser escolhidas,
+ * a não ser que TODAS estejam cheias (aí o pedido é para a lista de espera).
+ */
+export function abrirPedidoInscricao(aula, turmas, alunos, aoConcluir) {
   const livres = alunos.filter((al) =>
     !al.matriculas.some((m) => m.aula_id === aula.id) && !al.solicitacoes?.some((s) => s.aula_id === aula.id));
   const preco = (p) => aula[`preco_${p}`];
   const meses = { mensal: 1, semestral: 6, anual: 12 };
   const primeiroComPreco = Object.keys(PLANOS).find((p) => preco(p) !== null && preco(p) !== undefined) || 'mensal';
+  const fila = turmas.length ? turmas.every((t) => t.lotada) : !!aula.lotada;
+  const primeiraLivre = turmas.find((t) => fila || !t.lotada);
 
   const m = abrirModal({
-    titulo: `Inscrição — ${aula.nome}`,
+    titulo: `${fila ? 'Fila de espera' : 'Inscrição'} — ${aula.nome}`,
     largura: 480,
     corpo: `
       <form id="f-pedido" novalidate>
-        ${horariosHTML(aula.horarios) ? `<div class="campo"><span style="font-weight:600;font-size:14px">Horários</span>${horariosHTML(aula.horarios)}</div>` : ''}
+        ${fila ? `<div class="aviso alerta" style="margin-top:0">${turmas.length ? 'Todas as turmas' : 'Esta aula'} estão sem vagas no momento. Seu pedido entra na <strong>lista de espera</strong> e a recepção avisa quando abrir uma vaga.</div>` : ''}
+        ${turmas.length ? `
+          <fieldset style="border:0;padding:0;margin:0 0 14px">
+            <legend style="font-weight:600;font-size:14px;margin-bottom:6px">Escolha a turma</legend>
+            <div style="display:grid;gap:8px">${turmas.map((t) => {
+              const bloqueada = t.lotada && !fila;
+              return `
+              <label class="check turma-opcao ${bloqueada ? 'bloqueada' : ''}">
+                <input type="radio" name="turma" value="${t.id}" ${bloqueada ? 'disabled' : ''} ${t === primeiraLivre ? 'checked' : ''}>
+                <span><strong>${esc(t.nome)}</strong>${t.lotada ? ` <em class="tag-lotada">${fila ? 'lista de espera' : 'sem vagas'}</em>` : ''}
+                  ${t.horarios ? `<small>${esc(t.horarios).replace(/\n/g, ' · ')}</small>` : ''}
+                  ${t.descricao ? `<small>${esc(t.descricao)}</small>` : ''}</span>
+              </label>`;
+            }).join('')}</div>
+          </fieldset>`
+          : horariosHTML(aula.horarios) ? `<div class="campo"><span style="font-weight:600;font-size:14px">Horários</span>${horariosHTML(aula.horarios)}</div>` : ''}
         ${livres.length > 1 ? `
           <label class="campo"><span>Aluno</span>
             <select name="aluno">${livres.map((al) => `<option value="${al.id}">${esc(al.nome)}</option>`).join('')}</select></label>`
@@ -148,12 +239,12 @@ export function abrirPedidoInscricao(aula, alunos, aoConcluir) {
               <strong>${preco(p) === null || preco(p) === undefined ? 'a consultar' : money(preco(p))}</strong>
             </label>`).join('')}</div>
         </fieldset>
-        <label class="campo"><span>Observação (opcional)</span><textarea name="obs" maxlength="300" placeholder="Ex.: prefiro a turma da manhã"></textarea></label>
-        <div class="aviso info">A recepção vai receber seu pedido e confirmar a inscrição. Depois disso, o valor aparece no seu painel.</div>
+        <label class="campo"><span>Observação (opcional)</span><textarea name="obs" maxlength="300" placeholder="Ex.: tenho uma lesão no joelho"></textarea></label>
+        ${fila ? '' : '<div class="aviso info">A recepção vai receber seu pedido e confirmar a inscrição. Depois disso, o valor aparece no seu painel.</div>'}
         <div id="pd-erro"></div>
         <div class="acoes">
           <button class="btn sec" type="button" data-cancelar>Cancelar</button>
-          <button class="btn" type="submit">Enviar pedido</button>
+          <button class="btn ${fila ? 'amarelo' : ''}" type="submit">${fila ? 'Entrar na fila de espera' : 'Enviar pedido'}</button>
         </div>
       </form>`,
   });
@@ -161,13 +252,18 @@ export function abrirPedidoInscricao(aula, alunos, aoConcluir) {
   m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const turma = turmas.length ? form.querySelector('[name=turma]:checked')?.value : null;
+    if (turmas.length && !turma) {
+      m.el.querySelector('#pd-erro').innerHTML = '<div class="aviso erro">Escolha a turma.</div>';
+      return;
+    }
     await comBotao(form.querySelector('[type=submit]'), async () => {
       try {
         ok(await sb.rpc('solicitar_inscricao', {
-          p_aluno: form.aluno.value, p_aula: aula.id, p_plano: form.plano.value, p_obs: form.obs.value,
+          p_aluno: form.aluno.value, p_aula: aula.id, p_plano: form.plano.value, p_obs: form.obs.value, p_turma: turma,
         }));
         m.fechar();
-        toast('Pedido enviado! A recepção vai confirmar sua inscrição.');
+        toast(fila ? 'Pedido enviado! Você será avisado quando abrir uma vaga.' : 'Pedido enviado! A recepção vai confirmar sua inscrição.');
         aoConcluir();
       } catch (err) {
         m.el.querySelector('#pd-erro').innerHTML = `<div class="aviso erro">${esc(err.message)}</div>`;

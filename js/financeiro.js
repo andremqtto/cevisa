@@ -68,6 +68,62 @@ export const dadosParaPagamento = (p) => ({
   id: p.id, aluno_id: p.aluno_id, aluno_nome: p.alunos?.nome ?? p.aluno, plano: p.plano, valor: p.valor, vencimento: p.vencimento,
 });
 
+// ------------------------------------------------------------------ lançar diária
+/** Lançamento manual de uma diária (pagamento avulso): valor, forma, data e, se quiser, a modalidade. */
+export async function lancarDiaria(aoConcluir) {
+  const m = abrirModal({ titulo: 'Lançar diária', largura: 460, corpo: carregando() });
+  let aulas = [];
+  try {
+    aulas = ok(await sb.from('aulas').select('id,nome,preco_diaria').order('ordem').order('nome'));
+  } catch (e) { m.el.innerHTML = erroBox(e); return; }
+  m.el.innerHTML = `
+    <form id="f-diaria" novalidate>
+      <div class="grade2">
+        <label class="campo"><span>Valor (R$) *</span>
+          <input type="number" name="valor" min="0" step="0.01" inputmode="decimal" required></label>
+        <label class="campo"><span>Data do pagamento *</span>
+          <input type="date" name="data" required value="${hojeISO()}" max="${hojeISO()}"></label>
+      </div>
+      <label class="campo"><span>Método de pagamento *</span>
+        <select name="forma">${FORMAS.map((f) => `<option>${f}</option>`).join('')}</select></label>
+      <label class="campo"><span>Modalidade</span>
+        <select name="aula"><option value="">Sem modalidade</option>${aulas.map((a) => `<option value="${a.id}">${esc(a.nome)}${a.preco_diaria !== null && a.preco_diaria !== undefined ? ` — ${money(a.preco_diaria)}` : ''}</option>`).join('')}</select>
+        <small>Opcional. Escolher a modalidade separa a diária no relatório por modalidade.</small></label>
+      <label class="campo"><span>Descrição</span><input type="text" name="descricao" maxlength="120" placeholder="Ex.: visitante Maria Souza"></label>
+      <div id="d-erro"></div>
+      <div class="acoes">
+        <button class="btn sec" type="button" data-cancelar>Cancelar</button>
+        <button class="btn" type="submit">Lançar diária</button>
+      </div>
+    </form>`;
+  const form = m.el.querySelector('#f-diaria');
+  const erro = (t) => { m.el.querySelector('#d-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
+  m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
+  // ao escolher a modalidade, sugere o preço da diária dela
+  form.aula.addEventListener('change', () => {
+    const a = aulas.find((x) => x.id === form.aula.value);
+    if (a && a.preco_diaria !== null && a.preco_diaria !== undefined && !form.valor.value) form.valor.value = a.preco_diaria;
+  });
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const valor = Number(form.valor.value);
+    if (form.valor.value === '' || !(valor > 0)) return erro('Informe o valor da diária.');
+    if (!form.data.value) return erro('Informe a data do pagamento.');
+    erro('');
+    await comBotao(form.querySelector('[type=submit]'), async () => {
+      try {
+        ok(await sb.from('diarias').insert({
+          valor, forma: form.forma.value, data: form.data.value,
+          aula_id: form.aula.value || null, descricao: form.descricao.value.trim() || null,
+        }));
+        m.fechar();
+        toast(`Diária de ${money(valor)} lançada.`);
+        aoConcluir?.();
+      } catch (err) { erro(err.message); }
+    });
+  });
+}
+
 // ------------------------------------------------------------------ página de cobranças
 export async function renderCobrancas(el, { navegar }) {
   let aba = 'pendentes';
@@ -75,22 +131,32 @@ export async function renderCobrancas(el, { navegar }) {
   let dados = [];
 
   el.innerHTML = `
-    <div class="pagina-topo"><div><h1>Cobranças</h1><p class="sub">Mensalidades, semestralidades e anuidades dos alunos.</p></div></div>
+    <div class="pagina-topo">
+      <div><h1>Cobranças</h1><p class="sub">Mensalidades, semestralidades, anuidades e diárias.</p></div>
+      <div class="acoes-linha no-print"><button class="btn" type="button" id="lancar-diaria">＋ Lançar diária</button></div>
+    </div>
     <div id="kpis"></div>
     <div class="filtros">
       <div class="abas" role="tablist">
         <button type="button" data-aba="pendentes" class="atual">Pendentes</button>
         <button type="button" data-aba="atrasadas">Atrasadas</button>
         <button type="button" data-aba="pagas">Pagas</button>
+        <button type="button" data-aba="diarias">Diárias</button>
       </div>
       <input type="text" id="busca" placeholder="Buscar aluno…" aria-label="Buscar aluno">
     </div>
     <div class="card"><div id="lista"></div></div>`;
 
   const lista = el.querySelector('#lista');
+  el.querySelector('#lancar-diaria').onclick = () => lancarDiaria(() => {
+    if (aba === 'diarias') carregar();
+    else el.querySelector('[data-aba="diarias"]').click();
+  });
 
   async function carregar() {
     lista.innerHTML = carregando();
+    el.querySelector('#busca').placeholder = aba === 'diarias' ? 'Buscar descrição ou modalidade…' : 'Buscar aluno…';
+    if (aba === 'diarias') return carregarDiarias();
     try {
       const hoje = hojeISO();
       const base = sb.from('pagamentos').select('*, alunos(id,nome,ativo), matriculas(aulas(nome))');
@@ -119,7 +185,37 @@ export async function renderCobrancas(el, { navegar }) {
     } catch { /* os KPIs são opcionais */ }
   }
 
+  async function carregarDiarias() {
+    try {
+      dados = ok(await sb.from('diarias').select('*, aulas(nome)').order('data', { ascending: false })
+        .order('created_at', { ascending: false }).limit(300));
+      const mes = hojeISO().slice(0, 7);
+      const doMes = dados.filter((d) => d.data.startsWith(mes));
+      const soma = (arr) => arr.reduce((s, d) => s + Number(d.valor), 0);
+      el.querySelector('#kpis').innerHTML = `
+        <div class="resumo">
+          <div class="kpi verde"><span>Diárias no mês</span><strong>${money(soma(doMes))}</strong><small>${doMes.length} diária(s) lançada(s)</small></div>
+        </div>`;
+      desenharLista();
+    } catch (e) {
+      lista.innerHTML = erroBox(e);
+    }
+  }
+
+  function desenharDiarias() {
+    const q = busca.trim().toLowerCase();
+    const filtrados = dados.filter((d) => !q || `${d.descricao || ''} ${d.aulas?.nome || ''} ${d.forma}`.toLowerCase().includes(q));
+    if (!filtrados.length) { lista.innerHTML = vazio('Nenhuma diária lançada. Use “Lançar diária”.'); return; }
+    lista.innerHTML = `<div class="tabela-wrap"><table>
+      <thead><tr><th>Data</th><th>Modalidade</th><th>Descrição</th><th>Forma</th><th class="num">Valor</th><th></th></tr></thead>
+      <tbody>${filtrados.map((d) => `<tr>
+        <td>${fmtDate(d.data)}</td><td>${esc(d.aulas?.nome || '—')}</td><td>${esc(d.descricao || '—')}</td>
+        <td>${esc(d.forma)}</td><td class="num">${money(d.valor)}</td>
+        <td class="num"><button class="btn sec perigo pequeno" type="button" data-excluir-diaria="${d.id}">Excluir</button></td></tr>`).join('')}</tbody></table></div>`;
+  }
+
   function desenharLista() {
+    if (aba === 'diarias') return desenharDiarias();
     const q = busca.trim().toLowerCase();
     const filtrados = dados.filter((p) => !q || (p.alunos?.nome || '').toLowerCase().includes(q));
     if (!filtrados.length) {
@@ -156,7 +252,18 @@ export async function renderCobrancas(el, { navegar }) {
     carregar();
   });
   el.querySelector('#busca').addEventListener('input', (e) => { busca = e.target.value; desenharLista(); });
-  lista.addEventListener('click', (e) => {
+  lista.addEventListener('click', async (e) => {
+    const ex = e.target.closest('[data-excluir-diaria]');
+    if (ex) {
+      const d = dados.find((x) => x.id === ex.dataset.excluirDiaria);
+      if (!(await confirmar(`Excluir a diária de ${money(d.valor)} lançada em ${fmtDate(d.data)}?`, { titulo: 'Excluir diária', confirmarTexto: 'Excluir', perigo: true }))) return;
+      await comBotao(ex, async () => {
+        ok(await sb.from('diarias').delete().eq('id', d.id));
+        toast('Diária excluída.');
+        carregar();
+      });
+      return;
+    }
     const b = e.target.closest('[data-pagar]');
     if (!b) return;
     const p = dados.find((x) => x.id === b.dataset.pagar);

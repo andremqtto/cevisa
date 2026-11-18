@@ -312,25 +312,41 @@ export function editarAluno(aluno, aoSalvar) {
 // ================================================================== FICHA
 export async function renderFicha(el, id, { navegar }) {
   el.innerHTML = carregando('Carregando ficha…');
-  let aluno, mats, pags, filas, pedidos = [];
+  let aluno, mats, pags, filas, pedidos = [], comprovantes = [], turmasPorAula = {};
   try {
     aluno = ok(await sb.from('alunos').select('*').eq('id', id).maybeSingle());
     if (!aluno) { el.innerHTML = `<a class="voltar" href="#/alunos">← Alunos</a>${erroBox('Aluno não encontrado.')}`; return; }
-    mats = ok(await sb.from('matriculas').select('*, aulas(id,nome), trancamentos(id,mes)')
+    mats = ok(await sb.from('matriculas').select('*, aulas(id,nome), turmas(id,nome), trancamentos(id,mes)')
       .eq('aluno_id', id).order('created_at', { ascending: false }));
     pags = ok(await sb.from('pagamentos').select('*, matriculas(aulas(nome))')
       .eq('aluno_id', id).order('vencimento', { ascending: false }));
     // pedidos de inscrição feitos pelo aluno no app (ignora erro se o banco ainda não tiver a tabela)
-    const rp = await sb.from('solicitacoes_inscricao').select('id,aula_id,plano,observacao,created_at,aulas(nome)')
+    const rp = await sb.from('solicitacoes_inscricao').select('id,aula_id,turma_id,plano,observacao,created_at,aulas(nome),turmas(nome)')
       .eq('aluno_id', id).eq('status', 'pendente').order('created_at');
     pedidos = rp.error ? [] : rp.data;
+    // comprovantes enviados pelo aluno (links temporários para abrir o arquivo)
+    const rc = await sb.from('comprovantes').select('id,arquivo,nome_arquivo,observacao,created_at').eq('aluno_id', id)
+      .order('created_at', { ascending: false }).limit(20);
+    comprovantes = rc.error ? [] : rc.data;
+    if (comprovantes.length) {
+      const rs = await sb.storage.from('comprovantes').createSignedUrls(comprovantes.map((c) => c.arquivo), 3600);
+      for (const c of comprovantes) c.url = rs.data?.find((x) => x.path === c.arquivo)?.signedUrl || null;
+    }
+    // turmas das aulas do aluno (para trocar de turma)
+    const aulasIds = [...new Set(mats.filter((m) => m.status !== 'encerrada').map((m) => m.aula_id))];
+    if (aulasIds.length) {
+      const rt = await sb.from('turmas').select('id,aula_id,nome,vagas,ativa').in('aula_id', aulasIds).order('ordem').order('nome');
+      for (const t of rt.error ? [] : rt.data) (turmasPorAula[t.aula_id] ??= []).push(t);
+    }
     // posição na lista de espera de cada matrícula em espera
     filas = {};
     const esperas = mats.filter((m) => m.status === 'espera');
     if (esperas.length) {
-      const todas = ok(await sb.from('matriculas').select('id,aula_id,created_at')
+      const todas = ok(await sb.from('matriculas').select('id,aula_id,turma_id,created_at')
         .eq('status', 'espera').in('aula_id', esperas.map((m) => m.aula_id)).order('created_at'));
-      for (const m of esperas) filas[m.id] = todas.filter((t) => t.aula_id === m.aula_id).findIndex((t) => t.id === m.id) + 1;
+      for (const m of esperas) {
+        filas[m.id] = todas.filter((t) => t.aula_id === m.aula_id && t.turma_id === m.turma_id).findIndex((t) => t.id === m.id) + 1;
+      }
     }
   } catch (e) { el.innerHTML = `<a class="voltar" href="#/alunos">← Alunos</a>${erroBox(e)}`; return; }
 
@@ -362,7 +378,7 @@ export async function renderFicha(el, id, { navegar }) {
       <h2>Pedidos de inscrição pelo app <span class="badge alerta">${pedidos.length}</span></h2>
       <ul class="lista-equipe">${pedidos.map((p) => `
         <li>
-          <div><strong>${esc(p.aulas?.nome)}</strong> · plano ${planoLabel(p.plano)}
+          <div><strong>${esc(p.aulas?.nome)}${p.turmas?.nome ? ` — ${esc(p.turmas.nome)}` : ''}</strong> · plano ${planoLabel(p.plano)}
             <small>pedido em ${fmtDate(p.created_at.slice(0, 10))}${p.observacao ? ` · “${esc(p.observacao)}”` : ''}</small></div>
           <div class="acoes-linha">
             <button class="btn sec perigo pequeno" type="button" data-recusar-pedido="${p.id}">Recusar</button>
@@ -385,9 +401,20 @@ export async function renderFicha(el, id, { navegar }) {
       <h2>Aulas e planos</h2>
       ${mats.length ? `<div class="tabela-wrap"><table>
         <thead><tr><th>Aula</th><th>Plano</th><th>Situação</th><th>Início</th><th>Pago até</th><th>Meses trancados</th><th></th></tr></thead>
-        <tbody>${mats.map((m) => linhaMatricula(m, filas[m.id], hoje)).join('')}</tbody></table></div>`
+        <tbody>${mats.map((m) => linhaMatricula(m, filas[m.id], hoje, turmasPorAula[m.aula_id])).join('')}</tbody></table></div>`
         : vazio('Este aluno ainda não está inscrito em nenhuma aula.')}
     </section>
+
+    ${comprovantes.length ? `
+    <section class="card">
+      <h2>Comprovantes enviados pelo aluno</h2>
+      <ul class="lista-equipe">${comprovantes.map((c) => `
+        <li>
+          <div><strong>${fmtDate(c.created_at.slice(0, 10))}</strong> · ${esc(c.nome_arquivo || 'arquivo')}
+            ${c.observacao ? `<small>“${esc(c.observacao)}”</small>` : ''}</div>
+          ${c.url ? `<a class="btn sec pequeno" href="${esc(c.url)}" target="_blank" rel="noopener">Ver comprovante</a>` : ''}
+        </li>`).join('')}</ul>
+    </section>` : ''}
 
     <section class="card">
       <h2>Histórico de pagamentos ${pendentes.length ? `<span class="badge alerta">${pendentes.length} pendente(s)</span>` : ''}</h2>
@@ -441,7 +468,7 @@ export async function renderFicha(el, id, { navegar }) {
   el.querySelectorAll('[data-aceitar-pedido]').forEach((b) => {
     b.onclick = () => {
       const p = pedidos.find((x) => x.id === b.dataset.aceitarPedido);
-      inscrever(aluno, mats, recarregar, { aula_id: p.aula_id, plano: p.plano });
+      inscrever(aluno, mats, recarregar, { aula_id: p.aula_id, plano: p.plano, turma_id: p.turma_id });
     };
   });
   el.querySelectorAll('[data-recusar-pedido]').forEach((b) => {
@@ -461,6 +488,11 @@ export async function renderFicha(el, id, { navegar }) {
     if (pagar) {
       const p = pags.find((x) => x.id === pagar.dataset.pagar);
       return registrarPagamento({ id: p.id, aluno_id: id, aluno_nome: aluno.nome, plano: p.plano, valor: p.valor, vencimento: p.vencimento }, recarregar);
+    }
+    const troca = e.target.closest('[data-trocar-turma]');
+    if (troca) {
+      const mt = mats.find((x) => x.id === troca.dataset.trocarTurma);
+      return trocarTurma(mt, turmasPorAula[mt.aula_id] || [], recarregar);
     }
     const trancar = e.target.closest('[data-trancar]');
     if (trancar) return trancarMes(mats.find((m) => m.id === trancar.dataset.trancar), recarregar);
@@ -490,7 +522,7 @@ export async function renderFicha(el, id, { navegar }) {
   };
 }
 
-function linhaMatricula(m, posicao, hoje) {
+function linhaMatricula(m, posicao, hoje, turmas = []) {
   const st = m.status === 'ativa' ? '<span class="badge ok">Ativa</span>'
     : m.status === 'espera' ? `<span class="badge alerta">Lista de espera · ${posicao}º</span>`
     : '<span class="badge cinza">Encerrada</span>';
@@ -505,13 +537,15 @@ function linhaMatricula(m, posicao, hoje) {
   }
   const podeTrancar = m.status === 'ativa' && m.plano !== 'mensal';
   return `<tr>
-    <td><strong>${esc(m.aulas?.nome)}</strong></td>
+    <td><strong>${esc(m.aulas?.nome)}</strong>${m.turmas?.nome ? `<br><small class="sub">${esc(m.turmas.nome)}</small>`
+      : turmas.length && m.status !== 'encerrada' ? '<br><span class="badge alerta">sem turma</span>' : ''}</td>
     <td>${planoLabel(m.plano)}<br><small class="sub">${MESES_PLANO[m.plano]} mês(es)</small></td>
     <td>${st}</td>
     <td>${m.status === 'espera' ? '—' : fmtDate(m.data_inicio)}${m.data_encerramento ? `<br><small class="sub">encerrada em ${fmtDate(m.data_encerramento)}</small>` : ''}</td>
     <td>${pagoAte}</td>
     <td>${chips}</td>
     <td class="num"><div class="acoes-linha no-print">
+      ${turmas.length && m.status !== 'encerrada' ? `<button class="btn sec pequeno" type="button" data-trocar-turma="${m.id}">Trocar turma</button>` : ''}
       ${podeTrancar ? `<button class="btn sec pequeno" type="button" data-trancar="${m.id}">Trancar mês</button>` : ''}
       ${m.status !== 'encerrada' ? `<button class="btn sec perigo pequeno" type="button" data-encerrar="${m.id}">${m.status === 'espera' ? 'Sair da fila' : 'Encerrar'}</button>` : ''}
     </div></td></tr>`;
@@ -521,12 +555,21 @@ function linhaMatricula(m, posicao, hoje) {
 async function inscrever(aluno, mats, aoConcluir, preset = {}) {
   // preset: aula e plano escolhidos pelo aluno num pedido de inscrição feito pelo app
   const m = abrirModal({ titulo: `Inscrever ${aluno.nome}`, largura: 540, corpo: carregando() });
-  let aulas, ocupacao = {};
+  let aulas, turmas = [];
+  const ocupacao = {};   // chave: id da turma, ou id da aula para quem está sem turma
   try {
     aulas = ok(await sb.from('aulas').select('*').eq('ativa', true).order('ordem').order('nome'));
-    const vivos = ok(await sb.from('matriculas').select('aula_id,status').in('status', ['ativa', 'espera']));
-    for (const x of vivos) (ocupacao[x.aula_id] ??= { ativa: 0, espera: 0 })[x.status]++;
+    const vivos = ok(await sb.from('matriculas').select('aula_id,turma_id,status').in('status', ['ativa', 'espera']));
+    for (const x of vivos) (ocupacao[x.turma_id || x.aula_id] ??= { ativa: 0, espera: 0 })[x.status]++;
+    const rt = await sb.from('turmas').select('*').eq('ativa', true).order('ordem').order('nome');
+    turmas = rt.error ? [] : rt.data;
   } catch (e) { m.el.innerHTML = erroBox(e); return; }
+  const turmasDa = (aulaId) => turmas.filter((t) => t.aula_id === aulaId);
+  // vagas/ocupação do grupo escolhido: a turma, ou a aula inteira se ela não tem turmas
+  const grupo = (a, turmaId) => {
+    const t = turmaId && turmas.find((x) => x.id === turmaId);
+    return { vagas: t ? t.vagas : a.vagas, ...(ocupacao[t ? t.id : a.id] || { ativa: 0, espera: 0 }) };
+  };
 
   const jaEm = new Set(mats.filter((x) => x.status !== 'encerrada').map((x) => x.aula_id));
   const livres = aulas.filter((a) => !jaEm.has(a.id));
@@ -537,10 +580,18 @@ async function inscrever(aluno, mats, aoConcluir, preset = {}) {
     <form id="f-insc" novalidate>
       <label class="campo"><span>Aula</span>
         <select name="aula">${livres.map((a) => {
-          const o = ocupacao[a.id] || { ativa: 0, espera: 0 };
-          const cheia = o.ativa >= a.vagas;
-          return `<option value="${a.id}" ${a.id === preset.aula_id ? 'selected' : ''}>${esc(a.nome)} — ${cheia ? `CHEIA (fila: ${o.espera})` : `${a.vagas - o.ativa} vaga(s)`}</option>`;
+          const ts = turmasDa(a.id);
+          let rotulo;
+          if (ts.length) {
+            const vagas = ts.reduce((s, t) => s + Math.max(0, t.vagas - grupo(a, t.id).ativa), 0);
+            rotulo = `${ts.length} turma(s) · ${vagas ? `${vagas} vaga(s)` : 'TODAS CHEIAS'}`;
+          } else {
+            const o = grupo(a, null);
+            rotulo = o.ativa >= o.vagas ? `CHEIA (fila: ${o.espera})` : `${o.vagas - o.ativa} vaga(s)`;
+          }
+          return `<option value="${a.id}" ${a.id === preset.aula_id ? 'selected' : ''}>${esc(a.nome)} — ${rotulo}</option>`;
         }).join('')}</select></label>
+      <div id="campo-turma"></div>
       <fieldset style="border:0;padding:0;margin:0 0 14px">
         <legend style="font-weight:600;font-size:14px;margin-bottom:6px">Plano</legend>
         <div id="planos" style="display:grid;gap:8px"></div>
@@ -557,6 +608,19 @@ async function inscrever(aluno, mats, aoConcluir, preset = {}) {
   const erro = (t) => { m.el.querySelector('#i-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
   m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
 
+  function desenharTurmas() {
+    const a = livres.find((x) => x.id === form.aula.value);
+    const ts = turmasDa(a.id);
+    const escolhida = ts.find((t) => t.id === preset.turma_id) || ts.find((t) => grupo(a, t.id).ativa < t.vagas) || ts[0];
+    m.el.querySelector('#campo-turma').innerHTML = ts.length ? `
+      <label class="campo"><span>Turma</span>
+        <select name="turma">${ts.map((t) => {
+          const o = grupo(a, t.id);
+          return `<option value="${t.id}" ${t === escolhida ? 'selected' : ''}>${esc(t.nome)} — ${o.ativa >= t.vagas ? `CHEIA (fila: ${o.espera})` : `${t.vagas - o.ativa} vaga(s)`}</option>`;
+        }).join('')}</select></label>` : '';
+    form.turma?.addEventListener('change', atualizar);
+  }
+
   function atualizar() {
     const a = livres.find((x) => x.id === form.aula.value);
     const marcado = form.plano?.value || preset.plano || 'mensal';
@@ -565,8 +629,8 @@ async function inscrever(aluno, mats, aoConcluir, preset = {}) {
         <input type="radio" name="plano" value="${p}" ${p === marcado ? 'checked' : ''}>
         ${PLANOS[p]} <span style="margin-left:auto;font-weight:700;color:var(--azul)">${preco(a, p) === null ? 'sem preço' : money(preco(a, p))}</span>
       </label>`).join('');
-    const o = ocupacao[a.id] || { ativa: 0, espera: 0 };
-    const cheia = o.ativa >= a.vagas || o.espera > 0;
+    const o = grupo(a, form.turma?.value || null);
+    const cheia = o.ativa >= o.vagas || o.espera > 0;
     m.el.querySelector('#aviso-vaga').innerHTML = cheia
       ? `<div class="aviso alerta">Esta turma está cheia ou com fila: o aluno entrará na <strong>lista de espera</strong> (posição ${o.espera + 1}) e será chamado por ordem de reserva.</div>` : '';
     const semPreco = Object.keys(PLANOS).some((p) => preco(a, p) === null);
@@ -575,7 +639,8 @@ async function inscrever(aluno, mats, aoConcluir, preset = {}) {
   if (preset.aula_id && !livres.some((a) => a.id === preset.aula_id)) {
     m.el.querySelector('#aviso-vaga').insertAdjacentHTML('beforebegin', '<div class="aviso alerta">A aula pedida pelo aluno não está disponível (oculta ou já inscrito). Escolha outra ou recuse o pedido.</div>');
   }
-  form.aula.addEventListener('change', atualizar);
+  form.aula.addEventListener('change', () => { desenharTurmas(); atualizar(); });
+  desenharTurmas();
   atualizar();
 
   form.addEventListener('submit', async (e) => {
@@ -586,13 +651,53 @@ async function inscrever(aluno, mats, aoConcluir, preset = {}) {
     erro('');
     await comBotao(form.querySelector('[type=submit]'), async () => {
       try {
-        const r = ok(await sb.rpc('inscrever_aluno', { p_aluno: aluno.id, p_aula: form.aula.value, p_plano: form.plano.value, p_inicio: form.inicio.value }));
+        const args = { p_aluno: aluno.id, p_aula: form.aula.value, p_plano: form.plano.value, p_inicio: form.inicio.value };
+        if (form.turma?.value) args.p_turma = form.turma.value;
+        const r = ok(await sb.rpc('inscrever_aluno', args));
         m.fechar();
         toast(r.status === 'espera'
           ? `Turma cheia: ${aluno.nome} entrou na lista de espera (posição ${r.posicao_espera}).`
           : 'Aluno inscrito. A cobrança foi gerada — registre o pagamento quando receber.');
         aoConcluir();
       } catch (err) { erro(err.message); }
+    });
+  });
+}
+
+// ================================================================== TROCAR TURMA
+async function trocarTurma(mat, turmas, aoConcluir) {
+  const m = abrirModal({ titulo: `Trocar turma — ${mat.aulas.nome}`, largura: 460, corpo: carregando() });
+  const oc = {};
+  try {
+    const vivos = ok(await sb.from('matriculas').select('turma_id').eq('aula_id', mat.aula_id).eq('status', 'ativa'));
+    for (const x of vivos) if (x.turma_id) oc[x.turma_id] = (oc[x.turma_id] || 0) + 1;
+  } catch (e) { m.el.innerHTML = erroBox(e); return; }
+  m.el.innerHTML = `
+    <form id="f-troca" novalidate>
+      <label class="campo"><span>Nova turma</span>
+        <select name="turma">${turmas.map((t) => {
+          const atual = t.id === mat.turma_id;
+          const cheia = (oc[t.id] || 0) >= t.vagas;
+          return `<option value="${t.id}" ${atual ? 'selected' : ''}>${esc(t.nome)} — ${atual ? 'turma atual' : cheia ? 'CHEIA' : `${t.vagas - (oc[t.id] || 0)} vaga(s)`}${t.ativa ? '' : ' (oculta)'}</option>`;
+        }).join('')}</select></label>
+      ${mat.status === 'espera' ? '<div class="aviso info">O aluno está na lista de espera: ele passa para a fila da nova turma.</div>' : '<div class="aviso info">A vaga na turma atual é liberada para a lista de espera dela.</div>'}
+      <div id="tt-erro"></div>
+      <div class="acoes">
+        <button class="btn sec" type="button" data-cancelar>Cancelar</button>
+        <button class="btn" type="submit">Trocar</button>
+      </div>
+    </form>`;
+  const form = m.el.querySelector('#f-troca');
+  m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await comBotao(form.querySelector('[type=submit]'), async () => {
+      try {
+        ok(await sb.rpc('mudar_turma', { p_matricula: mat.id, p_turma: form.turma.value }));
+        m.fechar();
+        toast('Turma alterada.');
+        aoConcluir();
+      } catch (err) { m.el.querySelector('#tt-erro').innerHTML = `<div class="aviso erro">${esc(err.message)}</div>`; }
     });
   });
 }

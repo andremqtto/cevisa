@@ -155,11 +155,57 @@ create table if not exists public.solicitacoes_inscricao (
 create unique index if not exists solicitacoes_uma_pendente
   on public.solicitacoes_inscricao (aluno_id, aula_id) where status = 'pendente';
 
--- Novos tipos de notificação: aluno avisou que pagou / aluno pediu inscrição.
+-- Preço da diária (aula avulsa).
+alter table public.aulas add column if not exists preco_diaria numeric(10,2) check (preco_diaria is null or preco_diaria >= 0);
+
+-- Turmas de cada aula: horários, características e vagas próprias.
+-- Aula SEM turmas continua usando aulas.vagas; aula COM turmas usa as vagas de cada turma.
+create table if not exists public.turmas (
+  id         uuid primary key default gen_random_uuid(),
+  aula_id    uuid not null references public.aulas(id) on delete cascade,
+  nome       text not null,
+  horarios   text,                 -- um horário por linha
+  descricao  text,                 -- características: nível, faixa etária, professor...
+  vagas      integer not null default 10 check (vagas >= 0),
+  ativa      boolean not null default true,
+  ordem      integer not null default 0,
+  created_at timestamptz not null default now()
+);
+create index if not exists turmas_aula_idx on public.turmas (aula_id, ordem);
+alter table public.matriculas add column if not exists turma_id uuid references public.turmas(id) on delete set null;
+create index if not exists matriculas_turma_idx on public.matriculas (turma_id, status, created_at);
+alter table public.solicitacoes_inscricao add column if not exists turma_id uuid references public.turmas(id) on delete set null;
+
+-- Diárias (pagamentos avulsos lançados manualmente pela equipe).
+create table if not exists public.diarias (
+  id         uuid primary key default gen_random_uuid(),
+  aula_id    uuid references public.aulas(id) on delete set null,   -- modalidade (opcional)
+  valor      numeric(10,2) not null check (valor >= 0),
+  forma      text not null,
+  data       date not null default current_date,
+  descricao  text,
+  criado_por uuid default auth.uid() references auth.users(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create index if not exists diarias_data_idx on public.diarias (data);
+
+-- Comprovantes de pagamento enviados pelo aluno (arquivo no Storage, bucket "comprovantes").
+create table if not exists public.comprovantes (
+  id            uuid primary key default gen_random_uuid(),
+  aluno_id      uuid not null references public.alunos(id) on delete cascade,
+  arquivo       text not null,     -- caminho no bucket: <user_id>/<arquivo>
+  nome_arquivo  text,
+  observacao    text,
+  email_enviado boolean not null default false,
+  created_at    timestamptz not null default now()
+);
+create index if not exists comprovantes_aluno_idx on public.comprovantes (aluno_id, created_at desc);
+
+-- Novos tipos de notificação: aluno avisou que pagou / pediu inscrição / enviou comprovante.
 alter table public.notificacoes add column if not exists solicitacao_id uuid references public.solicitacoes_inscricao(id) on delete cascade;
 alter table public.notificacoes drop constraint if exists notificacoes_tipo_check;
 alter table public.notificacoes add constraint notificacoes_tipo_check
-  check (tipo in ('vence_em_breve','vencido','vaga_liberada','pagamento_informado','inscricao_solicitada'));
+  check (tipo in ('vence_em_breve','vencido','vaga_liberada','pagamento_informado','inscricao_solicitada','comprovante_enviado'));
 
 -- Se o gestor trocar o e-mail do aluno, o acesso antigo deixa de valer.
 create or replace function public._tg_alunos_email()
@@ -209,6 +255,19 @@ create policy solic_gestor on public.solicitacoes_inscricao for all to authentic
   using (public.is_gestor()) with check (public.is_gestor());
 grant select, update on public.solicitacoes_inscricao to authenticated; -- aluno só usa as funções abaixo
 
+alter table public.turmas       enable row level security;
+alter table public.diarias      enable row level security;
+alter table public.comprovantes enable row level security;
+drop policy if exists turmas_gestor on public.turmas;
+create policy turmas_gestor on public.turmas for all to authenticated using (public.is_gestor()) with check (public.is_gestor());
+drop policy if exists diarias_gestor on public.diarias;
+create policy diarias_gestor on public.diarias for all to authenticated using (public.is_gestor()) with check (public.is_gestor());
+drop policy if exists comprovantes_gestor on public.comprovantes;
+create policy comprovantes_gestor on public.comprovantes for all to authenticated using (public.is_gestor()) with check (public.is_gestor());
+grant select, insert, update, delete on public.turmas, public.diarias to authenticated;
+grant select, delete on public.comprovantes to authenticated;  -- o aluno envia pela função registrar_comprovante
+grant all on public.comprovantes, public.pagamentos, public.matriculas, public.aulas to service_role;
+
 alter table public.convites_admin enable row level security;
 drop policy if exists convites_principal on public.convites_admin;
 create policy convites_principal on public.convites_admin for select to authenticated using (public.is_gestor_principal());
@@ -240,13 +299,30 @@ drop policy if exists notif_gestor    on public.notificacoes;
 create policy notif_gestor    on public.notificacoes for all to authenticated using (public.is_gestor()) with check (public.is_gestor());
 
 -- Visitantes veem as aulas SEM o número de vagas, apenas as ativas.
+-- "lotada" diz só se há vaga (sem revelar quantas); vale para aulas sem turmas.
 create or replace view public.aulas_publicas as
-  select id, nome, descricao, foto_url, preco_mensal, preco_semestral, preco_anual, ordem, horarios
-  from public.aulas
-  where ativa
-  order by ordem, nome;
+  select a.id, a.nome, a.descricao, a.foto_url, a.preco_mensal, a.preco_semestral, a.preco_anual, a.ordem, a.horarios,
+         a.preco_diaria,
+         ((select count(*) from public.matriculas m
+            where m.aula_id = a.id and m.turma_id is null and m.status = 'ativa') >= a.vagas
+          or exists (select 1 from public.matriculas m
+                      where m.aula_id = a.id and m.turma_id is null and m.status = 'espera')) as lotada
+  from public.aulas a
+  where a.ativa
+  order by a.ordem, a.nome;
 
-grant select on public.aulas_publicas to anon, authenticated;
+-- Turmas visíveis aos alunos (sem o número de vagas).
+create or replace view public.turmas_publicas as
+  select t.id, t.aula_id, t.nome, t.horarios, t.descricao, t.ordem,
+         ((select count(*) from public.matriculas m where m.turma_id = t.id and m.status = 'ativa') >= t.vagas
+          or exists (select 1 from public.matriculas m where m.turma_id = t.id and m.status = 'espera')) as lotada
+  from public.turmas t
+  join public.aulas a on a.id = t.aula_id
+  where t.ativa and a.ativa
+  order by t.ordem, t.nome;
+
+grant select on public.aulas_publicas  to anon, authenticated;
+grant select on public.turmas_publicas to anon, authenticated;
 
 -- ---------------------------------------------------------------------
 -- Funções internas (não expostas na API)
@@ -280,29 +356,42 @@ begin
           m.data_fim);
 end $$;
 
--- Promove quem está na lista de espera enquanto houver vaga (ordem de reserva).
+-- Vagas de um "grupo": a turma (se houver) ou a aula inteira (matrículas sem turma).
+create or replace function public._vagas_grupo(p_aula uuid, p_turma uuid)
+returns int language sql stable security definer set search_path = public as $$
+  select case when p_turma is null then (select vagas from public.aulas  where id = p_aula)
+              else                      (select vagas from public.turmas where id = p_turma) end;
+$$;
+
+-- Promove quem está na lista de espera enquanto houver vaga (ordem de reserva), turma a turma.
 create or replace function public._promover_espera(p_aula uuid)
 returns void language plpgsql security definer set search_path = public as $$
 declare
-  v_vagas int; v_ocupadas int; m public.matriculas; v_nome text; v_aula text;
+  g record; v_vagas int; v_ocupadas int; m public.matriculas; v_nome text; v_aula text; v_turma text;
 begin
-  select vagas, nome into v_vagas, v_aula from public.aulas where id = p_aula;
-  loop
-    select count(*) into v_ocupadas from public.matriculas where aula_id = p_aula and status = 'ativa';
-    exit when v_ocupadas >= v_vagas;
-    select * into m from public.matriculas
-      where aula_id = p_aula and status = 'espera'
-      order by created_at, id limit 1 for update skip locked;
-    exit when not found;
-    update public.matriculas
-       set status = 'ativa', data_inicio = current_date, data_fim = current_date
-     where id = m.id;
-    perform public._criar_cobranca(m.id);
-    select nome into v_nome from public.alunos where id = m.aluno_id;
-    insert into public.notificacoes (tipo, aluno_id, matricula_id, referencia, mensagem)
-    values ('vaga_liberada', m.aluno_id, m.id, current_date,
-            v_nome || ' saiu da lista de espera de ' || v_aula || ' e já tem vaga. Avise o aluno e registre o pagamento.')
-    on conflict do nothing;
+  select nome into v_aula from public.aulas where id = p_aula;
+  for g in select distinct turma_id from public.matriculas where aula_id = p_aula and status = 'espera' loop
+    v_vagas := coalesce(public._vagas_grupo(p_aula, g.turma_id), 0);
+    v_turma := (select nome from public.turmas where id = g.turma_id);
+    loop
+      select count(*) into v_ocupadas from public.matriculas
+       where aula_id = p_aula and turma_id is not distinct from g.turma_id and status = 'ativa';
+      exit when v_ocupadas >= v_vagas;
+      select * into m from public.matriculas
+        where aula_id = p_aula and turma_id is not distinct from g.turma_id and status = 'espera'
+        order by created_at, id limit 1 for update skip locked;
+      exit when not found;
+      update public.matriculas
+         set status = 'ativa', data_inicio = current_date, data_fim = current_date
+       where id = m.id;
+      perform public._criar_cobranca(m.id);
+      select nome into v_nome from public.alunos where id = m.aluno_id;
+      insert into public.notificacoes (tipo, aluno_id, matricula_id, referencia, mensagem)
+      values ('vaga_liberada', m.aluno_id, m.id, current_date,
+              v_nome || ' saiu da lista de espera de ' || v_aula || coalesce(' (' || v_turma || ')', '')
+              || ' e já tem vaga. Avise o aluno e registre o pagamento.')
+      on conflict do nothing;
+    end loop;
   end loop;
 end $$;
 
@@ -315,6 +404,29 @@ end $$;
 drop trigger if exists aulas_vagas_aumentaram on public.aulas;
 create trigger aulas_vagas_aumentaram after update of vagas on public.aulas
   for each row execute function public._tg_aulas_vagas();
+
+create or replace function public._tg_turmas_vagas()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.vagas > old.vagas then perform public._promover_espera(new.aula_id); end if;
+  return new;
+end $$;
+drop trigger if exists turmas_vagas_aumentaram on public.turmas;
+create trigger turmas_vagas_aumentaram after update of vagas on public.turmas
+  for each row execute function public._tg_turmas_vagas();
+
+-- Não deixa excluir uma turma que ainda tem alunos (ativos ou na fila).
+create or replace function public._tg_turmas_excluir()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if exists (select 1 from public.matriculas where turma_id = old.id and status in ('ativa','espera')) then
+    raise exception 'Esta turma ainda tem alunos inscritos ou na lista de espera. Troque-os de turma ou desative a turma.';
+  end if;
+  return old;
+end $$;
+drop trigger if exists turmas_excluir on public.turmas;
+create trigger turmas_excluir before delete on public.turmas
+  for each row execute function public._tg_turmas_excluir();
 
 -- Gera cobranças e notificações de vencimento (idempotente).
 create or replace function public._atualizar_pendencias()
@@ -353,6 +465,9 @@ revoke all on function public._criar_cobranca(uuid)    from public, anon, authen
 revoke all on function public._promover_espera(uuid)   from public, anon, authenticated;
 revoke all on function public._atualizar_pendencias()  from public, anon, authenticated;
 revoke all on function public._tg_aulas_vagas()        from public, anon, authenticated;
+revoke all on function public._tg_turmas_vagas()       from public, anon, authenticated;
+revoke all on function public._tg_turmas_excluir()     from public, anon, authenticated;
+revoke all on function public._vagas_grupo(uuid, uuid) from public, anon, authenticated;
 
 -- ---------------------------------------------------------------------
 -- Funções chamadas pelo app (RPC) — todas exigem gestor
@@ -365,9 +480,11 @@ begin
   perform public._atualizar_pendencias();
 end $$;
 
--- Inscreve o aluno; se não houver vaga entra na lista de espera.
+-- Inscreve o aluno (numa turma, se a aula tiver turmas); se não houver vaga entra na lista de espera.
 -- Retorna: { matricula_id, status, posicao_espera }
-create or replace function public.inscrever_aluno(p_aluno uuid, p_aula uuid, p_plano text, p_inicio date default current_date)
+drop function if exists public.inscrever_aluno(uuid, uuid, text, date);
+create or replace function public.inscrever_aluno(p_aluno uuid, p_aula uuid, p_plano text,
+                                                  p_inicio date default current_date, p_turma uuid default null)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare
   v_vagas int; v_ocupadas int; v_id uuid; v_status text; v_pos int;
@@ -375,24 +492,33 @@ begin
   if not public.is_gestor() then raise exception 'Acesso negado.'; end if;
   if p_plano not in ('mensal','semestral','anual') then raise exception 'Plano inválido.'; end if;
 
-  select vagas into v_vagas from public.aulas where id = p_aula and ativa for update;
+  perform 1 from public.aulas where id = p_aula and ativa for update;
   if not found then raise exception 'Aula não encontrada ou oculta.'; end if;
+  if p_turma is null and exists (select 1 from public.turmas where aula_id = p_aula and ativa) then
+    raise exception 'Escolha a turma.';
+  end if;
+  if p_turma is not null and not exists (select 1 from public.turmas where id = p_turma and aula_id = p_aula) then
+    raise exception 'Turma não encontrada nesta aula.';
+  end if;
 
   if exists (select 1 from public.matriculas
               where aluno_id = p_aluno and aula_id = p_aula and status in ('ativa','espera')) then
     raise exception 'Este aluno já está inscrito (ou na lista de espera) nesta aula.';
   end if;
 
-  select count(*) into v_ocupadas from public.matriculas where aula_id = p_aula and status = 'ativa';
+  v_vagas := coalesce(public._vagas_grupo(p_aula, p_turma), 0);
+  select count(*) into v_ocupadas from public.matriculas
+   where aula_id = p_aula and turma_id is not distinct from p_turma and status = 'ativa';
   -- se já existe fila, quem chega agora entra no fim dela
-  if v_ocupadas < v_vagas and not exists (select 1 from public.matriculas where aula_id = p_aula and status = 'espera') then
+  if v_ocupadas < v_vagas and not exists (select 1 from public.matriculas
+       where aula_id = p_aula and turma_id is not distinct from p_turma and status = 'espera') then
     v_status := 'ativa';
   else
     v_status := 'espera';
   end if;
 
-  insert into public.matriculas (aluno_id, aula_id, plano, status, data_inicio, data_fim)
-  values (p_aluno, p_aula, p_plano, v_status, coalesce(p_inicio, current_date), coalesce(p_inicio, current_date))
+  insert into public.matriculas (aluno_id, aula_id, turma_id, plano, status, data_inicio, data_fim)
+  values (p_aluno, p_aula, p_turma, p_plano, v_status, coalesce(p_inicio, current_date), coalesce(p_inicio, current_date))
   returning id into v_id;
 
   -- conclui o pedido de inscrição feito pelo aluno no app (se houver)
@@ -408,11 +534,38 @@ begin
     v_pos := null;
   else
     select count(*) into v_pos from public.matriculas
-     where aula_id = p_aula and status = 'espera' and (created_at, id) <= (select created_at, id from public.matriculas where id = v_id);
+     where aula_id = p_aula and turma_id is not distinct from p_turma and status = 'espera'
+       and (created_at, id) <= (select created_at, id from public.matriculas where id = v_id);
   end if;
 
   return jsonb_build_object('matricula_id', v_id, 'status', v_status, 'posicao_espera', v_pos);
 end $$;
+
+-- Troca o aluno de turma (dentro da mesma aula). Libera a vaga antiga para a fila.
+create or replace function public.mudar_turma(p_matricula uuid, p_turma uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare m public.matriculas; v_ocupadas int;
+begin
+  if not public.is_gestor() then raise exception 'Acesso negado.'; end if;
+  select * into m from public.matriculas where id = p_matricula for update;
+  if not found or m.status = 'encerrada' then raise exception 'Matrícula não encontrada.'; end if;
+  if m.turma_id is not distinct from p_turma then return; end if;
+  if p_turma is not null and not exists (select 1 from public.turmas where id = p_turma and aula_id = m.aula_id) then
+    raise exception 'Turma não encontrada nesta aula.';
+  end if;
+  if m.status = 'ativa' then
+    select count(*) into v_ocupadas from public.matriculas
+     where aula_id = m.aula_id and turma_id is not distinct from p_turma and status = 'ativa';
+    if v_ocupadas >= coalesce(public._vagas_grupo(m.aula_id, p_turma), 0) then
+      raise exception 'A turma escolhida está cheia.';
+    end if;
+  end if;
+  update public.matriculas set turma_id = p_turma where id = m.id;
+  perform public._promover_espera(m.aula_id);
+end $$;
+
+revoke all on function public.mudar_turma(uuid, uuid) from public, anon;
+grant execute on function public.mudar_turma(uuid, uuid) to authenticated;
 
 -- Encerra a matrícula (libera a vaga e chama o próximo da fila).
 create or replace function public.encerrar_matricula(p_matricula uuid)
@@ -447,7 +600,7 @@ begin
   update public.notificacoes set lida = true
    where matricula_id = p.matricula_id and tipo in ('vence_em_breve','vencido','vaga_liberada');
   update public.notificacoes set lida = true
-   where aluno_id = p.aluno_id and tipo = 'pagamento_informado';
+   where aluno_id = p.aluno_id and tipo in ('pagamento_informado','comprovante_enviado');
 end $$;
 
 -- Tranca um mês (planos semestral/anual). O mês vai para o final do plano.
@@ -537,6 +690,36 @@ begin
                                   and (created_at at time zone 'America/Sao_Paulo')::date <  v_fim
                                   and status <> 'espera'
                                 group by plano) x), '[]'::jsonb),
+    'diarias',    coalesce((select sum(valor) from public.diarias where data >= v_ini and data < v_fim), 0),
+    'diarias_lista', coalesce((select jsonb_agg(jsonb_build_object(
+                         'id', d.id, 'data', d.data, 'aula', au.nome, 'forma', d.forma, 'valor', d.valor,
+                         'descricao', d.descricao) order by d.data, d.created_at)
+                       from public.diarias d left join public.aulas au on au.id = d.aula_id
+                       where d.data >= v_ini and d.data < v_fim), '[]'::jsonb),
+    -- Mesmo relatório, separado por modalidade (aula)
+    'modalidades', coalesce((select jsonb_agg(x order by x->>'ordem_', x->>'aula') from (
+        select jsonb_build_object(
+          'aula_id', au.id, 'aula', au.nome, 'ordem_', lpad(au.ordem::text, 6, '0'),
+          'alunos_ativos', (select count(*) from public.matriculas m where m.aula_id = au.id and m.status = 'ativa'),
+          'na_espera',     (select count(*) from public.matriculas m where m.aula_id = au.id and m.status = 'espera'),
+          'novas_matriculas', (select count(*) from public.matriculas m where m.aula_id = au.id and m.status <> 'espera'
+                                 and (m.created_at at time zone 'America/Sao_Paulo')::date >= v_ini
+                                 and (m.created_at at time zone 'America/Sao_Paulo')::date <  v_fim),
+          'recebido',  coalesce((select sum(p.valor) from public.pagamentos p join public.matriculas m on m.id = p.matricula_id
+                                  where m.aula_id = au.id and p.status = 'pago' and p.pago_em >= v_ini and p.pago_em < v_fim), 0),
+          'pagamentos', (select count(*) from public.pagamentos p join public.matriculas m on m.id = p.matricula_id
+                                  where m.aula_id = au.id and p.status = 'pago' and p.pago_em >= v_ini and p.pago_em < v_fim),
+          'a_receber', coalesce((select sum(p.valor) from public.pagamentos p join public.matriculas m on m.id = p.matricula_id
+                                  where m.aula_id = au.id and p.status = 'pendente' and p.vencimento >= v_ini and p.vencimento < v_fim), 0),
+          'em_debito', coalesce((select sum(p.valor) from public.pagamentos p join public.matriculas m on m.id = p.matricula_id
+                                  where m.aula_id = au.id and p.status = 'pendente' and p.vencimento >= v_ini and p.vencimento < v_fim
+                                    and p.vencimento < current_date), 0),
+          'diarias',   coalesce((select sum(d.valor) from public.diarias d where d.aula_id = au.id and d.data >= v_ini and d.data < v_fim), 0),
+          'qtd_diarias', (select count(*) from public.diarias d where d.aula_id = au.id and d.data >= v_ini and d.data < v_fim)
+        ) x
+        from public.aulas au) s), '[]'::jsonb),
+    'diarias_sem_modalidade', coalesce((select sum(valor) from public.diarias
+                                         where aula_id is null and data >= v_ini and data < v_fim), 0),
     'recebido',   coalesce((select sum(valor) from public.pagamentos
                              where status = 'pago' and pago_em >= v_ini and pago_em < v_fim), 0),
     'a_receber',  coalesce((select sum(valor) from public.pagamentos
@@ -558,14 +741,14 @@ begin
 end $$;
 
 revoke all on function public.atualizar_pendencias()                        from public, anon;
-revoke all on function public.inscrever_aluno(uuid, uuid, text, date)       from public, anon;
+revoke all on function public.inscrever_aluno(uuid, uuid, text, date, uuid) from public, anon;
 revoke all on function public.encerrar_matricula(uuid)                      from public, anon;
 revoke all on function public.registrar_pagamento(uuid, text, date)         from public, anon;
 revoke all on function public.trancar_mes(uuid, date)                       from public, anon;
 revoke all on function public.desfazer_trancamento(uuid)                    from public, anon;
 revoke all on function public.relatorio_mensal(int, int)                    from public, anon;
 grant execute on function public.atualizar_pendencias()                     to authenticated;
-grant execute on function public.inscrever_aluno(uuid, uuid, text, date)    to authenticated;
+grant execute on function public.inscrever_aluno(uuid, uuid, text, date, uuid) to authenticated;
 grant execute on function public.encerrar_matricula(uuid)                   to authenticated;
 grant execute on function public.registrar_pagamento(uuid, text, date)      to authenticated;
 grant execute on function public.trancar_mes(uuid, date)                    to authenticated;
@@ -605,7 +788,8 @@ begin
               select jsonb_agg(jsonb_build_object(
                        'id', m.id, 'aula_id', m.aula_id, 'status', m.status, 'plano', m.plano,
                        'data_inicio', m.data_inicio, 'data_fim', m.data_fim,
-                       'aula', au.nome, 'horarios', au.horarios,
+                       'aula', au.nome, 'horarios', coalesce(t.horarios, au.horarios),
+                       'turma_id', m.turma_id, 'turma', t.nome,
                        'preco', public._preco_do_plano(m.aula_id, m.plano),
                        'pendente', (select jsonb_build_object('id', p.id, 'valor', p.valor, 'vencimento', p.vencimento)
                                       from public.pagamentos p
@@ -613,11 +797,13 @@ begin
                                      order by p.vencimento limit 1)
                      ) order by au.ordem, au.nome)
                 from public.matriculas m join public.aulas au on au.id = m.aula_id
+                left join public.turmas t on t.id = m.turma_id
                where m.aluno_id = a.id and m.status in ('ativa','espera')), '[]'::jsonb),
            'solicitacoes', coalesce((
-              select jsonb_agg(jsonb_build_object('id', s.id, 'aula_id', s.aula_id, 'aula', au.nome,
+              select jsonb_agg(jsonb_build_object('id', s.id, 'aula_id', s.aula_id, 'aula', au.nome, 'turma', t.nome,
                                                   'plano', s.plano, 'created_at', s.created_at) order by s.created_at)
                 from public.solicitacoes_inscricao s join public.aulas au on au.id = s.aula_id
+                left join public.turmas t on t.id = s.turma_id
                where s.aluno_id = a.id and s.status = 'pendente'), '[]'::jsonb),
            'ultimo_pagamento', (select max(pago_em) from public.pagamentos where aluno_id = a.id and status = 'pago'),
            'pagamento_informado_em', (select max(created_at) from public.notificacoes
@@ -766,10 +952,13 @@ begin
   if not found then raise exception 'Cadastro não encontrado.'; end if;
 end $$;
 
--- Aluno pede inscrição numa aula; o gestor/admin recebe uma notificação no sino.
-create or replace function public.solicitar_inscricao(p_aluno uuid, p_aula uuid, p_plano text, p_obs text default null)
+-- Aluno pede inscrição numa aula (e turma); o gestor/admin recebe uma notificação no sino.
+-- Turma sem vaga só pode ser escolhida quando TODAS as turmas da aula estão cheias (fila de espera).
+drop function if exists public.solicitar_inscricao(uuid, uuid, text, text);
+create or replace function public.solicitar_inscricao(p_aluno uuid, p_aula uuid, p_plano text,
+                                                      p_obs text default null, p_turma uuid default null)
 returns uuid language plpgsql security definer set search_path = public as $$
-declare v_nome text; v_aula text; v_id uuid;
+declare v_nome text; v_aula text; v_turma text; v_lotada boolean; v_id uuid;
 begin
   if auth.uid() is null then raise exception 'Acesso negado.'; end if;
   select nome into v_nome from public.alunos where id = p_aluno and user_id = auth.uid();
@@ -777,6 +966,17 @@ begin
   if p_plano not in ('mensal','semestral','anual') then raise exception 'Plano inválido.'; end if;
   select nome into v_aula from public.aulas where id = p_aula and ativa;
   if not found then raise exception 'Aula não encontrada.'; end if;
+  if exists (select 1 from public.turmas where aula_id = p_aula and ativa) then
+    if p_turma is null then raise exception 'Escolha a turma.'; end if;
+    select nome, lotada into v_turma, v_lotada from public.turmas_publicas where id = p_turma and aula_id = p_aula;
+    if not found then raise exception 'Turma não encontrada.'; end if;
+    if v_lotada and exists (select 1 from public.turmas_publicas where aula_id = p_aula and not lotada) then
+      raise exception 'Essa turma está sem vagas. Escolha outra turma.';
+    end if;
+  else
+    p_turma := null;
+    select lotada into v_lotada from public.aulas_publicas where id = p_aula;
+  end if;
   if exists (select 1 from public.matriculas where aluno_id = p_aluno and aula_id = p_aula and status in ('ativa','espera')) then
     raise exception 'Você já está inscrito(a) nesta aula.';
   end if;
@@ -784,13 +984,14 @@ begin
     raise exception 'Você já pediu inscrição nesta aula. Aguarde a recepção.';
   end if;
 
-  insert into public.solicitacoes_inscricao (aluno_id, aula_id, plano, observacao)
-  values (p_aluno, p_aula, p_plano, left(nullif(trim(p_obs), ''), 300))
+  insert into public.solicitacoes_inscricao (aluno_id, aula_id, turma_id, plano, observacao)
+  values (p_aluno, p_aula, p_turma, p_plano, left(nullif(trim(p_obs), ''), 300))
   returning id into v_id;
 
   insert into public.notificacoes (tipo, aluno_id, solicitacao_id, referencia, mensagem)
   values ('inscricao_solicitada', p_aluno, v_id, current_date,
-          v_nome || ' pediu inscrição em ' || v_aula || ' (plano ' || p_plano || ').'
+          v_nome || ' pediu ' || case when v_lotada then 'vaga na lista de espera de ' else 'inscrição em ' end
+          || v_aula || coalesce(' — ' || v_turma, '') || ' (plano ' || p_plano || ').'
           || coalesce(' Obs.: ' || left(nullif(trim(p_obs), ''), 300), '')
           || ' Toque para abrir a ficha e inscrever.');
   return v_id;
@@ -806,9 +1007,9 @@ begin
   update public.notificacoes set lida = true where solicitacao_id = p_solicitacao;
 end $$;
 
-revoke all on function public.solicitar_inscricao(uuid, uuid, text, text) from public, anon;
+revoke all on function public.solicitar_inscricao(uuid, uuid, text, text, uuid) from public, anon;
 revoke all on function public.recusar_solicitacao(uuid)                   from public, anon;
-grant execute on function public.solicitar_inscricao(uuid, uuid, text, text) to authenticated;
+grant execute on function public.solicitar_inscricao(uuid, uuid, text, text, uuid) to authenticated;
 grant execute on function public.recusar_solicitacao(uuid)                   to authenticated;
 
 -- Uso interno da Edge Function: acha o usuário pelo e-mail.
@@ -831,6 +1032,53 @@ revoke all on function public.informar_pagamento(text, text)    from public, ano
 grant execute on function public.vincular_aluno()               to authenticated;
 grant execute on function public.painel_aluno()                 to authenticated;
 grant execute on function public.informar_pagamento(text, text) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- Comprovantes de pagamento enviados pelo aluno
+-- Arquivo vai para o bucket PRIVADO "comprovantes" (pasta = id do usuário);
+-- a equipe recebe aviso no sino e a Edge Function "enviar-comprovante" manda por e-mail.
+-- ---------------------------------------------------------------------
+insert into storage.buckets (id, name, public, file_size_limit)
+values ('comprovantes', 'comprovantes', false, 10485760)
+on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit;
+
+drop policy if exists comprovantes_envio on storage.objects;
+create policy comprovantes_envio on storage.objects for insert to authenticated
+  with check (bucket_id = 'comprovantes' and (storage.foldername(name))[1] = auth.uid()::text);
+drop policy if exists comprovantes_leitura on storage.objects;
+create policy comprovantes_leitura on storage.objects for select to authenticated
+  using (bucket_id = 'comprovantes' and (public.is_gestor() or (storage.foldername(name))[1] = auth.uid()::text));
+drop policy if exists comprovantes_exclusao on storage.objects;
+create policy comprovantes_exclusao on storage.objects for delete to authenticated
+  using (bucket_id = 'comprovantes' and public.is_gestor());
+
+create or replace function public.registrar_comprovante(p_aluno uuid, p_arquivo text, p_nome text default null, p_obs text default null)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare v_nome text; v_id uuid; v_obs text := left(nullif(trim(p_obs), ''), 300);
+begin
+  if auth.uid() is null then raise exception 'Acesso negado.'; end if;
+  select nome into v_nome from public.alunos where id = p_aluno and user_id = auth.uid();
+  if not found then raise exception 'Aluno não encontrado.'; end if;
+  if split_part(p_arquivo, '/', 1) <> auth.uid()::text
+     or not exists (select 1 from storage.objects where bucket_id = 'comprovantes' and name = p_arquivo) then
+    raise exception 'Arquivo não encontrado. Tente enviar de novo.';
+  end if;
+  if (select count(*) from public.comprovantes c join public.alunos a on a.id = c.aluno_id
+       where a.user_id = auth.uid() and c.created_at > now() - interval '1 hour') >= 10 then
+    raise exception 'Você enviou muitos comprovantes na última hora. Tente mais tarde.';
+  end if;
+  insert into public.comprovantes (aluno_id, arquivo, nome_arquivo, observacao)
+  values (p_aluno, p_arquivo, left(nullif(trim(p_nome), ''), 120), v_obs)
+  returning id into v_id;
+  insert into public.notificacoes (tipo, aluno_id, referencia, mensagem)
+  values ('comprovante_enviado', p_aluno, current_date,
+          v_nome || ' enviou um comprovante de pagamento.' || coalesce(' Obs.: ' || v_obs, '')
+          || ' Toque para ver na ficha do aluno.');
+  return v_id;
+end $$;
+
+revoke all on function public.registrar_comprovante(uuid, text, text, text) from public, anon;
+grant execute on function public.registrar_comprovante(uuid, text, text, text) to authenticated;
 
 -- ---------------------------------------------------------------------
 -- Fotos das aulas (Storage): leitura pública, escrita só de gestores

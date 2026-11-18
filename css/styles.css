@@ -241,6 +241,52 @@ td.num, th.num { text-align: right; white-space: nowrap; }
 .inscricao-selo { text-align: center; }
 .pedidos { border-color: #f3d39b; background: #fffbf2; }
 
+/* ------------------------------------------------------------ diária, turmas e fila de espera */
+.preco.diaria { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; }
+.preco.diaria small { display: none; }
+.btn.largo { width: 100%; }
+.btn.amarelo { background: #f2b705; color: #3d2c00; }
+.btn.amarelo:hover { background: #dda600; }
+.aula-acoes { flex-wrap: wrap; }
+.turmas-lista { display: grid; gap: 8px; }
+.turma-item { border: 1px solid var(--borda); border-radius: 10px; padding: 8px 10px; display: grid; gap: 4px; }
+.turma-item small { color: var(--suave); font-size: 13px; }
+.turma-item.lotada { background: #f1f3f5; color: #8a96a1; }
+.turma-item.lotada .horarios svg { color: #aab4bd; }
+.turma-nome { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.turma-opcao { margin: 0; align-items: flex-start; border: 1.5px solid var(--borda); border-radius: 10px; padding: 10px 12px; font-weight: 500; cursor: pointer; }
+.turma-opcao input { margin-top: 2px; flex: none; }
+.turma-opcao span { flex: 1; min-width: 0; }
+.turma-opcao small { display: block; color: var(--suave); font-size: 13px; }
+.turma-opcao:has(input:checked) { border-color: var(--azul); background: var(--azul-fundo); }
+.turma-opcao.bloqueada { background: #f1f3f5; color: #9aa5af; border-style: dashed; cursor: not-allowed; }
+.turma-opcao.bloqueada small { color: #aab4bd; }
+.tag-lotada { font-style: normal; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; margin-left: 4px; }
+.lista-turmas { list-style: none; margin: 0 0 8px; padding: 0; }
+.lista-turmas li { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 12px 0; border-top: 1px solid var(--borda); }
+.lista-turmas li:first-child { border-top: 0; }
+.lista-turmas small { display: block; color: var(--suave); margin-top: 3px; }
+.grupo-turma + .grupo-turma { border-top: 1px solid var(--borda); margin-top: 16px; padding-top: 12px; }
+.grupo-turma h3 { margin: 0 0 6px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.grupo-turma h4 { margin: 10px 0 4px; font-size: 14px; color: var(--suave); }
+
+/* ------------------------------------------------------------ comprovante */
+.arquivo-caixa { display: block; position: relative; border: 2px dashed var(--azul-claro); border-radius: 12px; padding: 18px 14px; text-align: center; cursor: pointer; margin-bottom: 14px; background: var(--azul-fundo); }
+.arquivo-caixa input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+.arquivo-texto { display: flex; flex-direction: column; align-items: center; gap: 4px; color: var(--azul); word-break: break-word; }
+.arquivo-texto small { color: var(--suave); }
+.arquivo-previa { display: block; max-width: 100%; max-height: 220px; margin: 12px auto 0; border-radius: 8px; }
+
+/* ------------------------------------------------------------ relatório por modalidade */
+.sub-abas { margin: 0 0 18px; }
+.grade-modalidades { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin-bottom: 18px; }
+.grade-modalidades .card { margin: 0; }
+.modalidade header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.modalidade h3 { margin: 0; }
+.modalidade header strong { color: var(--ok); font-size: 18px; white-space: nowrap; }
+.barra { height: 6px; background: #e9eef2; border-radius: 999px; margin: 10px 0 6px; overflow: hidden; }
+.barra span { display: block; height: 100%; background: var(--ok); border-radius: 999px; }
+
 /* ------------------------------------------------------------ zona de perigo */
 .zona-perigo { border-color: #f1c3bf; background: #fffafa; }
 .zona-perigo > h2 { color: var(--erro); }

@@ -29,6 +29,17 @@ Criar contas com senha exige a chave secreta do Supabase, que **não pode** fica
 
 Se mudar o arquivo no futuro, abra a função no painel, cole o código novo e publique de novo.
 
+### Função "enviar-comprovante" (e-mail dos comprovantes)
+O aluno envia o comprovante pelo app e ele chega **sempre** no sino e na ficha do aluno. Para receber também por **e-mail**, com o arquivo em anexo:
+1. Crie uma conta grátis em [resend.com](https://resend.com) e gere uma **API Key**.
+2. No Supabase, crie a função `enviar-comprovante` do mesmo jeito que a `criar-usuario`, colando `supabase/functions/enviar-comprovante/index.ts`.
+3. Em **Edge Functions → Secrets**, adicione:
+   - `RESEND_API_KEY` = a chave do Resend;
+   - `COMPROVANTE_EMAIL` = o e-mail que recebe os comprovantes (vários, separados por vírgula);
+   - opcional: `COMPROVANTE_REMETENTE` = remetente com domínio verificado no Resend (ex.: `CEVISA <comprovantes@seudominio.com.br>`). Sem isso, o Resend só entrega para o e-mail da própria conta do Resend.
+
+Sem esses segredos, o envio continua funcionando no app, só não vai e-mail.
+
 ### Acesso dos alunos
 1. Em **Alunos → Novo aluno**, digite só o **e-mail** do aluno (para crianças, o do responsável).
 2. O app mostra uma **senha temporária** com botões para copiar ou enviar por WhatsApp. Passe para o aluno.
@@ -41,7 +52,7 @@ Se mudar o arquivo no futuro, abra a função no painel, cole o código novo e p
 Em **Project Settings → API**, copie a **Project URL** e a chave **anon public** para `js/config.js`.
 Nunca use a chave `service_role` no app.
 
-No mesmo arquivo, preencha `WHATSAPP_NUMERO` (com DDI e DDD, só números, ex.: `5511912345678`). Ele é usado no balão do WhatsApp da tela inicial e no botão *Falar com o gestor* do painel do aluno.
+No mesmo arquivo, preencha `WHATSAPP_NUMERO` (com DDI e DDD, só números, ex.: `5511912345678`). Ele é usado no balão do WhatsApp da tela inicial.
 
 ### 4. Abrir
 O app usa módulos JavaScript, então precisa de um servidor local (não funciona abrindo o `index.html` direto):
@@ -52,15 +63,19 @@ Para publicar, envie a pasta inteira para qualquer hospedagem estática (Netlify
 
 ## Como o app funciona
 
-**Tela inicial (pública):** aulas com descrição, foto e preços mensal/semestral/anual. Visitantes **não** veem número de vagas. O botão **Entrar** abre o login em uma janela flutuante. Logado como gestor, os cartões ganham **Editar**, **Ver turma** e **Nova aula** (nome, descrição, preços, vagas, foto, ordem, ocultar/exibir).
+**Tela inicial (pública):** aulas com descrição, foto, turmas e preços mensal/semestral/anual e da diária. Visitantes **não** veem número de vagas. O botão **Entrar** abre o login em uma janela flutuante. Logado como gestor, os cartões ganham **Ver alunos**, **Turmas**, **Editar** e **Nova aula** (nome, descrição, preços, diária, vagas, foto, ordem, ocultar/exibir).
 
 **Gestor e admins:** quem foi cadastrado como gestor no passo 2 é o **gestor principal**. Só ele vê a aba **Admins**, onde adiciona ou remove admins pelo e-mail. Admins têm as mesmas permissões do gestor, mas não podem adicionar nem remover admins. Ao adicionar um admin, o app gera uma senha temporária; no primeiro acesso ele cria a própria senha. Se o e-mail já tiver conta, ele vira admin na hora.
 
-**Atalho no celular:** ao adicionar o site à tela inicial, o nome sugerido é **CEVISA** e o ícone é o símbolo da logo (`assets/icon-*.png`, `assets/apple-touch-icon.png` e `manifest.webmanifest`).
+**Atalho no celular:** ao adicionar o site à tela inicial, o nome sugerido é **CEVISA FITNESS** e o ícone é o símbolo da logo (`assets/icon-*.png`, `assets/apple-touch-icon.png` e `manifest.webmanifest`).
 
 **Horários:** cada aula tem um campo de horários (um por linha), editado pelo gestor em **Editar**. Aparecem na tela inicial e no painel do aluno.
 
-**Painel do aluno:** depois do login, o aluno vê as aulas contratadas com horários, o valor de cada plano, o **total a pagar** (mensalidades que vencem nos próximos 30 dias ou já vencidas) e a data de vencimento. Tem os botões **Falar com o gestor** (WhatsApp) e **Já paguei**: este avisa o gestor, que recebe na hora um **banner verde** no app; tocando nele, abre a ficha do aluno. O aviso some quando o gestor registra o pagamento. O aluno não tem nenhum privilégio de gestor: só enxerga os próprios dados.
+**Turmas:** cada aula pode ter várias turmas, em **Turmas** no cartão da aula. Cada turma tem nome, horários, características (nível, faixa etária, professor…) e vagas próprias. Os alunos veem as turmas no cartão; a equipe vê a ocupação de cada uma. Aula sem turmas continua usando as vagas e os horários da própria aula. Na ficha do aluno, **Trocar turma** muda o aluno de turma.
+
+**Inscrição pelo app:** no cartão da aula, o aluno vê **Fazer inscrição** enquanto houver vaga. Quando as vagas acabam, o botão fica **amarelo** e mostra **Fila de espera**. Ao pedir, o aluno escolhe a turma (as sem vaga aparecem em cinza e não podem ser escolhidas) e o plano. A equipe recebe o pedido no sino e conclui a inscrição na ficha; a cobrança aparece na hora no painel do aluno.
+
+**Painel do aluno:** depois do login, o aluno vê as aulas contratadas com horários, o valor de cada plano, o **total a pagar** (mensalidades que vencem nos próximos 30 dias ou já vencidas) e a data de vencimento. Tem os botões **Enviar comprovante** (foto ou PDF; a equipe recebe no sino, em banner, na ficha do aluno e por e-mail) e **Já paguei**: este avisa o gestor, que recebe na hora um **banner verde** no app; tocando nele, abre a ficha do aluno. O aviso some quando o gestor registra o pagamento. O aluno não tem nenhum privilégio de gestor: só enxerga os próprios dados.
 
 **WhatsApp:** visitantes (antes do login) veem um balão fixo no canto da tela que abre uma conversa no WhatsApp.
 
@@ -72,9 +87,9 @@ Para publicar, envie a pasta inteira para qualquer hospedagem estática (Netlify
 
 **Trancar matrícula (semestral e anual):** só para um mês que ainda não começou e que esteja dentro do período já pago. O mês trancado vai para o final: o plano ganha 1 mês. É possível desfazer enquanto o mês não começou.
 
-**Cobranças:** pendentes, atrasadas e pagas, com busca e registro de pagamento.
+**Cobranças:** pendentes, atrasadas, pagas e diárias, com busca e registro de pagamento. **Lançar diária** registra um pagamento avulso: valor, método, data e, se quiser, a modalidade.
 
-**Relatórios:** por mês, novos alunos, planos contratados, recebido, a receber, alunos em débito e lista de pagamentos. Tem botão de imprimir.
+**Relatórios:** por mês, em duas sub-abas. **Geral** mostra novos alunos, planos contratados, mensalidades recebidas, diárias recebidas, total recebido, a receber, alunos em débito e as listas de pagamentos e diárias. **Modalidades** mostra os mesmos números separados por aula. Tem botão de imprimir.
 
 ## Decisões que tomei (fáceis de mudar)
 - **Preços semestral e anual são o valor total do plano**, pago de uma vez (o app mostra também o equivalente por mês). Planos mensais geram uma cobrança por mês.
