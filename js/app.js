@@ -4,7 +4,7 @@ import { esc, abrirModal, fecharTodosModais, toast, comBotao, carregando, erroBo
 import { renderHome } from './home.js';
 import { iniciarNotificacoes, pararNotificacoes } from './notificacoes.js';
 
-// papel: 'gestor' (gestor principal ou admin) | 'aluno' | null (visitante)
+// papel: 'gestor' (gestor principal ou admin) | 'professor' | 'aluno' | null (visitante)
 // principal: true só para o gestor principal (pode gerenciar admins)
 // trocarSenha: entrou com senha temporária; cadastrosPendentes: fichas que o aluno ainda precisa completar
 const estado = { papel: null, email: null, principal: false, erroVinculo: null, trocarSenha: false, cadastrosPendentes: [] };
@@ -17,7 +17,11 @@ const ROTAS = {
     { rota: 'alunos', rotulo: 'Alunos' },
     { rota: 'cobrancas', rotulo: 'Cobranças' },
     { rota: 'relatorios', rotulo: 'Relatórios' },
-    { rota: 'equipe', rotulo: 'Admins', soPrincipal: true },
+    { rota: 'equipe', rotulo: 'Equipe' },
+  ],
+  professor: [
+    { rota: '', rotulo: 'Meus alunos' },
+    { rota: 'aulas', rotulo: 'Aulas' },
   ],
   aluno: [
     { rota: '', rotulo: 'Meu painel' },
@@ -50,7 +54,7 @@ function desenharTopo(rotaAtual, { bloqueado = false } = {}) {
     .map((r) => `<a href="#/${r.rota}" class="${r.rota === rotaAtual ? 'atual' : ''}">${r.rotulo}</a>`).join('');
   let acoes = '<button class="btn" id="btn-entrar" type="button">Entrar</button>';
   if (estado.papel === 'gestor') acoes = '<span id="notif-host"></span><button class="btn sec pequeno" id="btn-sair" type="button">Sair</button>';
-  if (estado.papel === 'aluno') acoes = '<button class="btn sec pequeno" id="btn-sair" type="button">Sair</button>';
+  if (estado.papel === 'aluno' || estado.papel === 'professor') acoes = '<button class="btn sec pequeno" id="btn-sair" type="button">Sair</button>';
   document.getElementById('topo').innerHTML = `
     <div class="topo-in">
       <a class="logo" href="#/" aria-label="CEVISA — Spa Médico Adventista, página inicial"><img src="assets/logo.png" alt="Spa Médico Adventista Cevisa"></a>
@@ -164,6 +168,7 @@ async function verificarPapel() {
     if (aceitou) g = await buscarEquipe();
   }
   if (g) {
+    if (g.papel === 'professor') return (estado.papel = 'professor');
     estado.principal = (g.papel ?? 'gestor') === 'gestor';
     return (estado.papel = 'gestor');
   }
@@ -220,7 +225,7 @@ async function rotear() {
   }
 
   const permitidas = estado.papel === 'gestor'
-    ? ['', ...ROTAS_GESTOR.filter((r) => r !== 'equipe' || estado.principal)]
+    ? ['', ...ROTAS_GESTOR]
     : ['', 'aulas'];
   if (!permitidas.includes(rota)) { history.replaceState(null, '', '#/'); rota = ''; }
 
@@ -228,6 +233,12 @@ async function rotear() {
   window.scrollTo(0, 0);
   raiz.innerHTML = carregando();
   try {
+    if (estado.papel === 'professor') {
+      if (rota === 'aulas') return await renderHome(raiz, { isGestor: false });
+      const { renderProfessor } = await import('./professor.js');
+      if (minha !== versaoRota) return;
+      return await renderProfessor(raiz, { navegar });
+    }
     if (estado.papel === 'aluno') {
       if (rota === 'aulas') return await renderHome(raiz, { isGestor: false, logado: true });
       const { renderPainelAluno } = await import('./aluno.js');
@@ -250,7 +261,7 @@ async function rotear() {
     } else if (rota === 'equipe') {
       const { renderEquipe } = await import('./equipe.js');
       if (minha !== versaoRota) return;
-      await renderEquipe(raiz);
+      await renderEquipe(raiz, { principal: estado.principal });
     }
   } catch (e) {
     raiz.innerHTML = erroBox(e);

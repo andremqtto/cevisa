@@ -39,10 +39,14 @@ Deno.serve(async (req) => {
     });
 
     const { data: ehGestor } = await chamador.rpc('is_gestor');
-    if (!ehGestor) return falha('Apenas gestores e admins podem fazer isso.', 403);
+    const { data: ehProfessor } = ehGestor ? { data: false } : await chamador.rpc('is_professor');
+    if (!ehGestor && !ehProfessor) return falha('Apenas a equipe pode fazer isso.', 403);
+    const { data: { user: quemChama } } = await chamador.auth.getUser();
 
     const corpo = await req.json().catch(() => ({}));
     const acao = String(corpo.acao || '');
+    // Professor só pode cadastrar alunos novos.
+    if (ehProfessor && acao !== 'criar_aluno') return falha('Professores só podem cadastrar alunos.', 403);
     const email = String(corpo.email || '').trim().toLowerCase();
 
     const usuarioPorEmail = async (e: string): Promise<string | null> => {
@@ -84,7 +88,9 @@ Deno.serve(async (req) => {
       if (userId) {
         if (await ehDaEquipe(userId)) return falha('Este e-mail pertence a um gestor/admin e não pode ser usado para aluno.');
         if (fichas?.some((f) => f.user_id === userId)) {
-          return falha('Já existe um aluno com este e-mail. Abra a ficha dele e use “Gerar nova senha” se ele esqueceu a senha.', 409);
+          return falha(ehProfessor
+            ? 'Já existe um aluno com este e-mail. Se ele esqueceu a senha, peça à recepção para gerar uma nova.'
+            : 'Já existe um aluno com este e-mail. Abra a ficha dele e use “Gerar nova senha” se ele esqueceu a senha.', 409);
         }
         senha = await definirSenhaTemporaria(userId); // conta criada antes (ex.: cadastro antigo): reaproveita
       } else {
@@ -101,7 +107,8 @@ Deno.serve(async (req) => {
         alunoId = livre.id;
       } else {
         const { data, error } = await admin.from('alunos')
-          .insert({ nome: email, email, user_id: userId, cadastro_completo: false }).select('id').single();
+          .insert({ nome: email, email, user_id: userId, cadastro_completo: false, criado_por: quemChama?.id ?? null })
+          .select('id').single();
         if (error) {
           if (criouConta) await admin.auth.admin.deleteUser(userId);
           throw error;
@@ -123,23 +130,37 @@ Deno.serve(async (req) => {
       return responder({ email: ficha.email, senha });
     }
 
-    // ------------------------------------------------------------ novo admin (só gestor principal)
+    // ------------------------------------------------------------ novo admin (só gestor principal) ou professor (gestor ou admin)
     if (acao === 'criar_admin') {
-      const { data: principal } = await chamador.rpc('is_gestor_principal');
-      if (!principal) return falha('Apenas o gestor principal pode adicionar admins.', 403);
+      const papel = corpo.papel === 'professor' ? 'professor' : 'admin';
+      if (papel === 'admin') {
+        const { data: principal } = await chamador.rpc('is_gestor_principal');
+        if (!principal) return falha('Apenas o gestor principal pode adicionar admins.', 403);
+      }
       if (!emailValido(email)) return falha('E-mail inválido.');
       const nome = String(corpo.nome || '').trim().slice(0, 120) || null;
+      const aulas: string[] = Array.isArray(corpo.aulas) ? corpo.aulas.map(String) : [];
+
+      const ligarAulas = async (userId: string) => {
+        if (papel !== 'professor' || !aulas.length) return;
+        const { error } = await admin.from('professor_aulas').insert(aulas.map((aula_id) => ({ user_id: userId, aula_id })));
+        if (error) throw error;
+      };
 
       const existente = await usuarioPorEmail(email);
       if (existente) {
         if (await ehDaEquipe(existente)) return falha('Este e-mail já faz parte da equipe.');
-        const { error } = await admin.from('gestores').insert({ user_id: existente, nome, papel: 'admin', email });
+        const { data: ficha } = await admin.from('alunos').select('id').eq('user_id', existente).limit(1).maybeSingle();
+        if (ficha) return falha('Este e-mail é de um aluno. Use outro e-mail para a equipe.');
+        const { error } = await admin.from('gestores').insert({ user_id: existente, nome, papel, email });
         if (error) throw error;
+        await ligarAulas(existente);
         return responder({ status: 'ativo', email }); // já tinha conta: usa a senha que já tem
       }
       const { userId, senha } = await criarConta(email);
-      const { error } = await admin.from('gestores').insert({ user_id: userId, nome, papel: 'admin', email });
+      const { error } = await admin.from('gestores').insert({ user_id: userId, nome, papel, email });
       if (error) { await admin.auth.admin.deleteUser(userId); throw error; }
+      await ligarAulas(userId);
       return responder({ status: 'criado', email, senha });
     }
 

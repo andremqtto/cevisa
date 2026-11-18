@@ -2,7 +2,8 @@
 import { sb, ok, chamarCriarUsuario } from './supabase.js';
 import {
   esc, money, fmtDate, fmtMes, planoLabel, PLANOS, hojeISO, diasEntre, primeiroDiaMes, abrirModal, toast,
-  confirmar, comBotao, carregando, vazio, erroBox, mostrarCredenciais,
+  confirmar, comBotao, carregando, vazio, erroBox, mostrarCredenciais, linkWhatsAppPara, ICONE_WHATSAPP,
+  nomeParticipante, camposParticipante, ligarParticipante, lerParticipante,
 } from './ui.js';
 import { registrarPagamento } from './financeiro.js';
 import * as config from './config.js';
@@ -41,7 +42,7 @@ export async function renderAlunos(el, { navegar }) {
   let alunos;
   try {
     alunos = ok(await sb.from('alunos')
-      .select('id,nome,email,telefone,ativo,cadastro_completo,created_at, matriculas(id,status,plano,data_fim,aulas(nome))')
+      .select('id,nome,email,telefone,ativo,cadastro_completo,created_at,participante_proprio,participante_nome, matriculas(id,status,plano,data_fim,aulas(nome))')
       .order('nome'));
   } catch (e) { el.innerHTML = erroBox(e); return; }
 
@@ -57,7 +58,7 @@ export async function renderAlunos(el, { navegar }) {
       </div>
     </div>
     <div class="filtros">
-      <input type="text" id="busca" placeholder="Buscar por nome ou telefone…" aria-label="Buscar aluno">
+      <input type="text" id="busca" placeholder="Buscar por aluno, responsável ou telefone…" aria-label="Buscar aluno">
       <select id="filtro" aria-label="Filtrar">
         <option value="todos">Todos</option>
         <option value="ativos">Ativos</option>
@@ -73,7 +74,7 @@ export async function renderAlunos(el, { navegar }) {
   function desenhar() {
     const q = busca.trim().toLowerCase();
     const arr = alunos.filter((a) => {
-      if (q && !(a.nome.toLowerCase().includes(q) || (a.telefone || '').replace(/\D/g, '').includes(q.replace(/\D/g, '') || '§'))) return false;
+      if (q && !(a.nome.toLowerCase().includes(q) || nomeParticipante(a).toLowerCase().includes(q) ||(a.telefone || '').replace(/\D/g, '').includes(q.replace(/\D/g, '') || '§'))) return false;
       const s = situacao(a.matriculas);
       if (filtro === 'ativos') return a.ativo;
       if (filtro === 'inativos') return !a.ativo;
@@ -89,7 +90,7 @@ export async function renderAlunos(el, { navegar }) {
         const s = situacao(a.matriculas);
         const vivas = a.matriculas.filter((m) => m.status !== 'encerrada');
         return `<tr class="clicavel" data-id="${a.id}" tabindex="0">
-          <td><strong>${esc(a.nome)}</strong>${a.ativo ? '' : ' <span class="badge cinza">Desativado</span>'}${a.cadastro_completo === false ? ' <span class="badge alerta">Aguardando 1º acesso</span>' : ''}<br><small class="sub">${esc(a.telefone || '')}</small></td>
+          <td><strong>${esc(nomeParticipante(a))}</strong>${nomeParticipante(a) !== a.nome ? `<br><small class="sub">resp.: ${esc(a.nome)}</small>` : ''}${a.ativo ? '' : ' <span class="badge cinza">Desativado</span>'}${a.cadastro_completo === false ? ' <span class="badge alerta">Aguardando 1º acesso</span>' : ''}<br><small class="sub">${esc(a.telefone || '')}</small></td>
           <td>${vivas.length ? vivas.map((m) => `${esc(m.aulas?.nome)}${m.status === 'espera' ? ' <span class="badge alerta">espera</span>' : ''}`).join('<br>') : '—'}</td>
           <td>${vivas.length ? vivas.map((m) => planoLabel(m.plano)).join('<br>') : '—'}</td>
           <td><span class="badge ${s.cls}">${s.txt}</span></td>
@@ -111,7 +112,7 @@ export async function renderAlunos(el, { navegar }) {
 }
 
 // ================================================================== QR CODE DO APP
-async function abrirQrCode() {
+export async function abrirQrCode() {
   const url = config.APP_URL || `${location.origin}${location.pathname}`;
   const m = abrirModal({ titulo: 'QR Code do app', largura: 420, corpo: carregando('Gerando QR Code…') });
   let qr;
@@ -174,7 +175,8 @@ async function abrirQrCode() {
 }
 
 // ================================================================== NOVO ALUNO (só e-mail + senha temporária)
-function novoAluno(navegar) {
+// professor: true → sem cadastro manual e sem abrir a ficha (o professor não acessa fichas); chama aoCriar no fim.
+export function novoAluno(navegar, { professor = false, aoCriar } = {}) {
   const m = abrirModal({
     titulo: 'Novo aluno',
     largura: 460,
@@ -188,13 +190,14 @@ function novoAluno(navegar) {
           <button class="btn sec" type="button" data-cancelar>Cancelar</button>
           <button class="btn" type="submit">Criar acesso</button>
         </div>
-        <p class="login-troca">Aluno sem e-mail? <button type="button" class="link" data-manual>Cadastrar sem acesso ao app</button></p>
+        ${professor ? '<p class="login-troca">Depois, a recepção faz a inscrição do aluno na aula e na turma.</p>'
+          : '<p class="login-troca">Aluno sem e-mail? <button type="button" class="link" data-manual>Cadastrar sem acesso ao app</button></p>'}
       </form>`,
   });
   const form = m.el.querySelector('#f-novo');
   const erro = (t) => { m.el.querySelector('#n-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
   m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
-  m.el.querySelector('[data-manual]').onclick = () => { m.fechar(); editarAluno(null, (novo) => navegar(`#/alunos/${novo.id}`)); };
+  m.el.querySelector('[data-manual]')?.addEventListener('click', () => { m.fechar(); editarAluno(null, (novo) => navegar(`#/alunos/${novo.id}`)); });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const email = form.email.value.trim().toLowerCase();
@@ -204,6 +207,11 @@ function novoAluno(navegar) {
       try {
         const r = await chamarCriarUsuario({ acao: 'criar_aluno', email });
         m.fechar();
+        if (professor) {
+          aoCriar?.();
+          mostrarCredenciais({ email: r.email, senha: r.senha });
+          return;
+        }
         navegar(`#/alunos/${r.aluno_id}`);
         setTimeout(() => mostrarCredenciais({ email: r.email, senha: r.senha }), 400);
       } catch (err) { erro(err.message); }
@@ -264,14 +272,14 @@ export function editarAluno(aluno, aoSalvar) {
     largura: 600,
     corpo: `
       <form id="f-aluno" novalidate>
-        <label class="campo"><span>Nome completo *</span><input type="text" name="nome" required maxlength="120" value="${esc(a.nome)}"></label>
+        <label class="campo"><span>Nome completo do responsável *</span><input type="text" name="nome" required maxlength="120" value="${esc(a.nome)}"><small>Titular do cadastro: tem o acesso ao app e cuida dos pagamentos.</small></label>
         <div class="grade2">
           <label class="campo"><span>CPF</span><input type="text" name="cpf" inputmode="numeric" maxlength="14" value="${esc(a.cpf)}"></label>
           <label class="campo"><span>Data de nascimento</span><input type="date" name="data_nascimento" max="${hojeISO()}" value="${esc(a.data_nascimento)}"></label>
           <label class="campo"><span>Telefone / WhatsApp</span><input type="tel" name="telefone" maxlength="20" value="${esc(a.telefone)}"></label>
           <label class="campo"><span>E-mail</span><input type="email" name="email" maxlength="120" inputmode="email" autocapitalize="none" value="${esc(a.email)}"><small>É o login do aluno no app. Se trocar, o acesso atual é desligado e será preciso usar “Criar acesso ao app” na ficha.</small></label>
         </div>
-        <label class="campo"><span>Responsável</span><input type="text" name="responsavel" maxlength="120" value="${esc(a.responsavel)}"><small>Para bebês e crianças.</small></label>
+        ${camposParticipante(a)}
         <label class="campo"><span>Endereço</span><input type="text" name="endereco" maxlength="200" value="${esc(a.endereco)}"></label>
         <label class="campo"><span>Observações</span><textarea name="observacoes" maxlength="800">${esc(a.observacoes)}</textarea></label>
         <div id="a-erro"></div>
@@ -284,17 +292,21 @@ export function editarAluno(aluno, aoSalvar) {
   const form = m.el.querySelector('#f-aluno');
   const erro = (t) => { m.el.querySelector('#a-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
   m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
+  ligarParticipante(form);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const nome = form.nome.value.trim();
-    if (!nome) return erro('Informe o nome do aluno.');
+    if (!nome) return erro('Informe o nome do responsável.');
     const email = form.email.value.trim();
     if (email && !/^\S+@\S+\.\S+$/.test(email)) return erro('E-mail inválido.');
+    let part;
+    try { part = lerParticipante(form); } catch (err) { return erro(err.message); }
     erro('');
     const v = (n) => form[n].value.trim() || null;
     const dados = {
       nome, cpf: v('cpf'), data_nascimento: form.data_nascimento.value || null, telefone: v('telefone'),
-      email: email || null, responsavel: v('responsavel'), endereco: v('endereco'), observacoes: v('observacoes'),
+      email: email || null, endereco: v('endereco'), observacoes: v('observacoes'),
+      participante_proprio: part.proprio, participante_nome: part.nome, participante_nascimento: part.nascimento,
     };
     await comBotao(form.querySelector('[type=submit]'), async () => {
       try {
@@ -362,10 +374,13 @@ export async function renderFicha(el, id, { navegar }) {
     <div class="pagina-topo">
       <div>
         <h1>${esc(aluno.nome)} <span class="badge ${aluno.ativo ? 'ok' : 'cinza'}" style="vertical-align:middle">${aluno.ativo ? 'Ativo' : 'Desativado'}</span></h1>
+        ${nomeParticipante(aluno) !== aluno.nome ? `<p class="participante-linha">Faz as aulas: <strong>${esc(nomeParticipante(aluno))}</strong> · ${esc(aluno.nome)} é o(a) responsável</p>` : ''}
         <p class="sub"><span class="badge ${s.cls}">${s.txt}</span> · cliente desde ${fmtDate((aluno.created_at || '').slice(0, 10))} · total pago ${money(totalPago)}
           · ${aluno.user_id && aluno.cadastro_completo === false ? '<span class="badge alerta">Aguardando 1º acesso do aluno</span>' : aluno.user_id ? '<span class="badge ok">Acesso ao app ativo</span>' : aluno.email ? '<span class="badge cinza">Ainda não acessou o app</span>' : '<span class="badge alerta">Sem e-mail: cadastre um para liberar o app</span>'}</p>
       </div>
       <div class="acoes-linha no-print">
+        <a class="btn whats" id="mensagem" target="_blank" rel="noopener"
+          href="${esc(linkWhatsAppPara(aluno.telefone, `Olá, ${aluno.nome.split(' ')[0]}! Aqui é do Spa Médico Adventista Cevisa.`) || '#')}">${ICONE_WHATSAPP}Enviar mensagem</a>
         <button class="btn sec" type="button" id="editar">Editar dados</button>
         ${aluno.user_id ? '<button class="btn sec" type="button" id="nova-senha">Gerar nova senha</button>' : aluno.email ? '<button class="btn sec" type="button" id="criar-acesso">Criar acesso ao app</button>' : ''}
         <button class="btn sec ${aluno.ativo ? 'perigo' : ''}" type="button" id="alternar">${aluno.ativo ? 'Desativar aluno' : 'Ativar aluno'}</button>
@@ -392,7 +407,10 @@ export async function renderFicha(el, id, { navegar }) {
       <dl class="dados">
         ${dado('CPF', aluno.cpf)}${dado('Nascimento', aluno.data_nascimento ? fmtDate(aluno.data_nascimento) : '')}
         ${dado('Telefone', aluno.telefone)}${dado('E-mail', aluno.email)}
-        ${dado('Responsável', aluno.responsavel)}${dado('Endereço', aluno.endereco)}
+        ${dado('Quem faz as aulas', aluno.participante_proprio === false
+          ? `${nomeParticipante(aluno)}${aluno.participante_nascimento ? ` (nasc. ${fmtDate(aluno.participante_nascimento)})` : ''}`
+          : 'O próprio responsável')}
+        ${aluno.responsavel ? dado('Responsável (cadastro antigo)', aluno.responsavel) : ''}${dado('Endereço', aluno.endereco)}
         ${dado('Observações', aluno.observacoes)}
       </dl>
     </section>
@@ -439,7 +457,12 @@ export async function renderFicha(el, id, { navegar }) {
     </section>`;
 
   // ---- ações
-  el.querySelector('#excluir').onclick = () => excluirAluno(aluno, mats, () => navegar('#/alunos'));
+  el.querySelector('#mensagem').addEventListener('click', (e) => {
+    if (e.currentTarget.getAttribute('href') !== '#') return;
+    e.preventDefault();
+    toast(aluno.telefone ? 'O telefone deste aluno parece incompleto. Confira o DDD em “Editar dados”.' : 'Este aluno não tem telefone cadastrado. Adicione em “Editar dados”.', 'erro');
+  });
+  el.querySelector('#excluir').onclick =() => excluirAluno(aluno, mats, () => navegar('#/alunos'));
   el.querySelector('#editar').onclick = () => editarAluno(aluno, recarregar);
   el.querySelector('#nova-senha')?.addEventListener('click', async (e) => {
     if (!(await confirmar(`Gerar uma nova senha temporária para ${aluno.nome}? A senha atual dele deixa de funcionar.`, { titulo: 'Nova senha', confirmarTexto: 'Gerar nova senha' }))) return;
@@ -554,7 +577,7 @@ function linhaMatricula(m, posicao, hoje, turmas = []) {
 // ================================================================== INSCREVER
 async function inscrever(aluno, mats, aoConcluir, preset = {}) {
   // preset: aula e plano escolhidos pelo aluno num pedido de inscrição feito pelo app
-  const m = abrirModal({ titulo: `Inscrever ${aluno.nome}`, largura: 540, corpo: carregando() });
+  const m = abrirModal({ titulo: `Inscrever ${nomeParticipante(aluno)}`, largura: 540, corpo: carregando() });
   let aulas, turmas = [];
   const ocupacao = {};   // chave: id da turma, ou id da aula para quem está sem turma
   try {

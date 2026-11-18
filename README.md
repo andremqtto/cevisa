@@ -43,7 +43,7 @@ Sem esses segredos, o envio continua funcionando no app, só não vai e-mail.
 ### Acesso dos alunos
 1. Em **Alunos → Novo aluno**, digite só o **e-mail** do aluno (para crianças, o do responsável).
 2. O app mostra uma **senha temporária** com botões para copiar ou enviar por WhatsApp. Passe para o aluno.
-3. No primeiro acesso, o aluno é obrigado a **criar a própria senha** e **completar o cadastro** (nome, telefone e demais dados) antes de usar o app.
+3. No primeiro acesso, a pessoa é obrigada a **criar a própria senha** e **completar o cadastro** antes de usar o app. O cadastro é sempre do **responsável** (quem tem o login e paga). No bloco **"Quem vai fazer as aulas?"**, ela marca **"O próprio responsável"** ou informa o nome e a data de nascimento do dependente. Nas listas das turmas (equipe e professores) aparece o nome de quem faz as aulas. Para um segundo filho, cadastre outra ficha com o **mesmo e-mail** do responsável (*Cadastrar sem acesso ao app*): ela aparece automaticamente no app dele.
 4. Esqueceu a senha? Na ficha do aluno, use **Gerar nova senha**.
 5. Aluno sem e-mail: em **Novo aluno**, use *Cadastrar sem acesso ao app* (cadastro manual, como antes).
 6. A ficha mostra se o aluno já tem **acesso ao app** ou se está **aguardando o 1º acesso**. Se você trocar o e-mail da ficha, o acesso antigo é desligado; use **Criar acesso ao app** na ficha.
@@ -65,7 +65,9 @@ Para publicar, envie a pasta inteira para qualquer hospedagem estática (Netlify
 
 **Tela inicial (pública):** aulas com descrição, foto, turmas e preços mensal/semestral/anual e da diária. Visitantes **não** veem número de vagas. O botão **Entrar** abre o login em uma janela flutuante. Logado como gestor, os cartões ganham **Ver alunos**, **Turmas**, **Editar** e **Nova aula** (nome, descrição, preços, diária, vagas, foto, ordem, ocultar/exibir).
 
-**Gestor e admins:** quem foi cadastrado como gestor no passo 2 é o **gestor principal**. Só ele vê a aba **Admins**, onde adiciona ou remove admins pelo e-mail. Admins têm as mesmas permissões do gestor, mas não podem adicionar nem remover admins. Ao adicionar um admin, o app gera uma senha temporária; no primeiro acesso ele cria a própria senha. Se o e-mail já tiver conta, ele vira admin na hora.
+**Gestor, admins e professores:** quem foi cadastrado como gestor no passo 2 é o **gestor principal**. Na aba **Equipe**, ele adiciona ou remove admins e professores pelo e-mail; os admins também usam essa aba, mas só para adicionar, remover e escolher as aulas dos professores. Ao adicionar alguém, o app gera uma senha temporária; no primeiro acesso a pessoa cria a própria senha.
+- **Admins** têm as mesmas permissões do gestor, mas não mexem na equipe.
+- **Professores** só veem a aba **Meus alunos**: os alunos (e a lista de espera) das aulas atribuídas a eles, separados por turma, com idade, responsável, telefone e atalho para o WhatsApp. Também cadastram alunos novos (por e-mail, com senha temporária) e abrem o **QR Code** do app. Não veem valores, pagamentos, relatórios nem as fichas completas. As aulas de cada professor são escolhidas ao criá-lo e podem ser trocadas no botão **Aulas** da aba Equipe. Depois que o professor cadastra um aluno, a recepção faz a inscrição na aula e na turma.
 
 **Atalho no celular:** ao adicionar o site à tela inicial, o nome sugerido é **CEVISA FITNESS** e o ícone é o símbolo da logo (`assets/icon-*.png`, `assets/apple-touch-icon.png` e `manifest.webmanifest`).
 
@@ -79,7 +81,7 @@ Para publicar, envie a pasta inteira para qualquer hospedagem estática (Netlify
 
 **WhatsApp:** visitantes (antes do login) veem um balão fixo no canto da tela que abre uma conversa no WhatsApp.
 
-**Alunos:** busca e filtros (ativos, desativados, plano vencido, lista de espera). Clicando no aluno abre a ficha: dados pessoais, aulas e planos (início, pago até, meses trancados), histórico de pagamentos, ativar/desativar, inscrever em aula.
+**Alunos:** busca e filtros (ativos, desativados, plano vencido, lista de espera). Clicando no aluno abre a ficha: botão **Enviar mensagem** (abre o WhatsApp do aluno pelo telefone cadastrado), dados pessoais, aulas e planos (início, pago até, meses trancados), histórico de pagamentos, ativar/desativar, inscrever em aula.
 
 **Vagas e lista de espera:** se a turma está cheia, a inscrição entra na lista de espera, por ordem de reserva. Quando uma vaga abre (matrícula encerrada ou vagas aumentadas), o primeiro da fila é promovido automaticamente, uma cobrança é gerada e o gestor recebe uma notificação.
 

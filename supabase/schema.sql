@@ -131,7 +131,30 @@ alter table public.alunos add column if not exists cadastro_completo boolean not
 alter table public.gestores add column if not exists papel text not null default 'gestor';
 alter table public.gestores add column if not exists email text;
 alter table public.gestores drop constraint if exists gestores_papel_check;
-alter table public.gestores add constraint gestores_papel_check check (papel in ('gestor','admin'));
+alter table public.gestores add constraint gestores_papel_check check (papel in ('gestor','admin','professor'));
+
+-- Professores: veem os alunos das aulas atribuídas a eles e podem cadastrar alunos novos.
+-- NÃO têm acesso ao financeiro nem às fichas completas.
+create table if not exists public.professor_aulas (
+  user_id uuid not null references public.gestores(user_id) on delete cascade,
+  aula_id uuid not null references public.aulas(id) on delete cascade,
+  primary key (user_id, aula_id)
+);
+-- Quem cadastrou o aluno (para o professor ver os alunos que ele mesmo cadastrou).
+alter table public.alunos add column if not exists criado_por uuid references auth.users(id) on delete set null;
+
+-- O cadastro (ficha) é do RESPONSÁVEL: quem tem o login e paga.
+-- Quem faz as aulas é o próprio responsável (participante_proprio) ou um dependente (participante_nome).
+alter table public.alunos add column if not exists participante_proprio    boolean not null default true;
+alter table public.alunos add column if not exists participante_nome       text;
+alter table public.alunos add column if not exists participante_nascimento date;
+
+-- Nome de quem faz as aulas (o dependente, ou o próprio responsável).
+create or replace function public._participante(a public.alunos)
+returns text language sql immutable as $$
+  select case when a.participante_proprio or nullif(trim(a.participante_nome), '') is null then a.nome
+              else a.participante_nome end;
+$$;
 
 -- Admins convidados que ainda não criaram a senha (entram pelo "Primeiro acesso").
 create table if not exists public.convites_admin (
@@ -237,7 +260,16 @@ returns boolean
 language sql stable security definer
 set search_path = public
 as $$
-  select exists (select 1 from public.gestores where user_id = auth.uid());
+  select exists (select 1 from public.gestores where user_id = auth.uid() and papel in ('gestor','admin'));
+$$;
+
+-- Professor: acesso restrito (lista de alunos das suas aulas + cadastro de alunos).
+create or replace function public.is_professor()
+returns boolean
+language sql stable security definer
+set search_path = public
+as $$
+  select exists (select 1 from public.gestores where user_id = auth.uid() and papel = 'professor');
 $$;
 
 -- Só o gestor principal (não os admins) pode gerenciar admins.
@@ -254,6 +286,13 @@ drop policy if exists solic_gestor on public.solicitacoes_inscricao;
 create policy solic_gestor on public.solicitacoes_inscricao for all to authenticated
   using (public.is_gestor()) with check (public.is_gestor());
 grant select, update on public.solicitacoes_inscricao to authenticated; -- aluno só usa as funções abaixo
+
+alter table public.professor_aulas enable row level security;
+drop policy if exists prof_aulas_ver on public.professor_aulas;
+create policy prof_aulas_ver on public.professor_aulas for select to authenticated
+  using (public.is_gestor() or user_id = auth.uid());
+grant select on public.professor_aulas to authenticated;   -- alterações só pela função definir_aulas_professor
+grant all on public.professor_aulas to service_role;
 
 alter table public.turmas       enable row level security;
 alter table public.diarias      enable row level security;
@@ -284,7 +323,7 @@ alter table public.trancamentos enable row level security;
 alter table public.notificacoes enable row level security;
 
 drop policy if exists gestores_self   on public.gestores;
-create policy gestores_self   on public.gestores     for select to authenticated using (user_id = auth.uid() or public.is_gestor_principal());
+create policy gestores_self   on public.gestores     for select to authenticated using (user_id = auth.uid() or public.is_gestor());
 drop policy if exists aulas_gestor    on public.aulas;
 create policy aulas_gestor    on public.aulas        for all to authenticated using (public.is_gestor()) with check (public.is_gestor());
 drop policy if exists alunos_gestor   on public.alunos;
@@ -783,7 +822,7 @@ declare r jsonb;
 begin
   if auth.uid() is null then raise exception 'Acesso negado.'; end if;
   select coalesce(jsonb_agg(jsonb_build_object(
-           'id', a.id, 'nome', a.nome, 'ativo', a.ativo, 'cadastro_completo', a.cadastro_completo,
+           'id', a.id, 'nome', a.nome, 'participante', public._participante(a), 'ativo', a.ativo, 'cadastro_completo', a.cadastro_completo,
            'matriculas', coalesce((
               select jsonb_agg(jsonb_build_object(
                        'id', m.id, 'aula_id', m.aula_id, 'status', m.status, 'plano', m.plano,
@@ -877,14 +916,71 @@ begin
   return 'convidado';
 end $$;
 
--- Remove um admin (nunca o gestor principal).
+-- Remove um membro da equipe (nunca o gestor principal).
+-- Gestor principal remove admins e professores; admins removem só professores.
 create or replace function public.remover_admin(p_user uuid)
 returns void language plpgsql security definer set search_path = public as $$
 begin
-  if not public.is_gestor_principal() then raise exception 'Apenas o gestor principal pode remover admins.'; end if;
-  delete from public.gestores where user_id = p_user and papel = 'admin';
-  if not found then raise exception 'Admin não encontrado.'; end if;
+  if public.is_gestor_principal() then
+    delete from public.gestores where user_id = p_user and papel in ('admin','professor');
+  elsif public.is_gestor() then
+    delete from public.gestores where user_id = p_user and papel = 'professor';
+  else
+    raise exception 'Acesso negado.';
+  end if;
+  if not found then raise exception 'Membro da equipe não encontrado (admins só podem remover professores).'; end if;
 end $$;
+
+-- Define em quais aulas (modalidades) o professor dá aula (gestor ou admin).
+create or replace function public.definir_aulas_professor(p_user uuid, p_aulas uuid[])
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_gestor() then raise exception 'Acesso negado.'; end if;
+  if not exists (select 1 from public.gestores where user_id = p_user and papel = 'professor') then
+    raise exception 'Professor não encontrado.';
+  end if;
+  delete from public.professor_aulas where user_id = p_user;
+  insert into public.professor_aulas (user_id, aula_id)
+  select p_user, a.id from public.aulas a where a.id = any(coalesce(p_aulas, '{}'));
+end $$;
+
+-- Painel do professor: alunos (inscritos e lista de espera) das aulas dele, por turma.
+-- Só dados de contato; nada financeiro.
+create or replace function public.professor_painel()
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+begin
+  if not public.is_professor() then raise exception 'Acesso negado.'; end if;
+  return jsonb_build_object(
+    'aulas', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'id', au.id, 'nome', au.nome, 'vagas', au.vagas, 'horarios', au.horarios,
+        'turmas', coalesce((select jsonb_agg(jsonb_build_object('id', t.id, 'nome', t.nome, 'horarios', t.horarios, 'vagas', t.vagas)
+                                              order by t.ordem, t.nome)
+                              from public.turmas t where t.aula_id = au.id and t.ativa), '[]'::jsonb),
+        'alunos', coalesce((select jsonb_agg(jsonb_build_object(
+                                     'nome', public._participante(a),
+                                     'responsavel', case when public._participante(a) <> a.nome then a.nome else a.responsavel end,
+                                     'nascimento', case when public._participante(a) <> a.nome then a.participante_nascimento
+                                                        else a.data_nascimento end,
+                                     'telefone', a.telefone, 'status', m.status, 'turma_id', m.turma_id,
+                                     'desde', m.data_inicio)
+                                   order by m.status, case when m.status = 'espera' then m.created_at end, public._participante(a))
+                              from public.matriculas m join public.alunos a on a.id = m.aluno_id
+                             where m.aula_id = au.id and m.status in ('ativa','espera')), '[]'::jsonb)
+      ) order by au.ordem, au.nome)
+      from public.aulas au join public.professor_aulas pa on pa.aula_id = au.id and pa.user_id = auth.uid()), '[]'::jsonb),
+    'cadastrados', coalesce((
+      select jsonb_agg(jsonb_build_object('nome', x.nome, 'email', x.email, 'cadastro_completo', x.cadastro_completo,
+                                          'created_at', x.created_at) order by x.created_at desc)
+      from (select nome, email, cadastro_completo, created_at from public.alunos
+             where criado_por = auth.uid() order by created_at desc limit 30) x), '[]'::jsonb)
+  );
+end $$;
+
+revoke all on function public.definir_aulas_professor(uuid, uuid[]) from public, anon;
+revoke all on function public.professor_painel()                    from public, anon;
+grant execute on function public.definir_aulas_professor(uuid, uuid[]) to authenticated;
+grant execute on function public.professor_painel()                    to authenticated;
 
 create or replace function public.cancelar_convite_admin(p_email text)
 returns void language plpgsql security definer set search_path = public as $$
@@ -930,23 +1026,34 @@ returns jsonb language sql stable security definer set search_path = public as $
     from public.alunos where user_id = auth.uid() and not cadastro_completo;
 $$;
 
--- O próprio aluno completa os dados no primeiro acesso.
+-- O responsável completa os dados no primeiro acesso, dizendo quem vai fazer as aulas
+-- (ele mesmo, ou um dependente com nome e data de nascimento).
+drop function if exists public.completar_cadastro(uuid, text, text, text, date, text, text);
 create or replace function public.completar_cadastro(
   p_aluno uuid, p_nome text, p_telefone text, p_cpf text default null, p_nascimento date default null,
-  p_endereco text default null, p_responsavel text default null)
+  p_endereco text default null, p_proprio boolean default true,
+  p_participante text default null, p_participante_nasc date default null)
 returns void language plpgsql security definer set search_path = public as $$
 begin
   if auth.uid() is null then raise exception 'Acesso negado.'; end if;
   if nullif(trim(p_nome), '') is null then raise exception 'Informe o nome completo.'; end if;
   if nullif(trim(p_telefone), '') is null then raise exception 'Informe o telefone.'; end if;
   if p_nascimento is not null and p_nascimento > current_date then raise exception 'Data de nascimento inválida.'; end if;
+  if not coalesce(p_proprio, true) and nullif(trim(p_participante), '') is null then
+    raise exception 'Informe o nome de quem vai fazer as aulas.';
+  end if;
+  if p_participante_nasc is not null and p_participante_nasc > current_date then
+    raise exception 'Data de nascimento de quem vai fazer as aulas inválida.';
+  end if;
   update public.alunos
      set nome = left(trim(p_nome), 120),
          telefone = left(trim(p_telefone), 20),
          cpf = left(nullif(trim(p_cpf), ''), 14),
          data_nascimento = p_nascimento,
          endereco = left(nullif(trim(p_endereco), ''), 200),
-         responsavel = left(nullif(trim(p_responsavel), ''), 120),
+         participante_proprio = coalesce(p_proprio, true),
+         participante_nome = case when coalesce(p_proprio, true) then null else left(trim(p_participante), 120) end,
+         participante_nascimento = case when coalesce(p_proprio, true) then null else p_participante_nasc end,
          cadastro_completo = true
    where id = p_aluno and user_id = auth.uid();
   if not found then raise exception 'Cadastro não encontrado.'; end if;
@@ -961,7 +1068,9 @@ returns uuid language plpgsql security definer set search_path = public as $$
 declare v_nome text; v_aula text; v_turma text; v_lotada boolean; v_id uuid;
 begin
   if auth.uid() is null then raise exception 'Acesso negado.'; end if;
-  select nome into v_nome from public.alunos where id = p_aluno and user_id = auth.uid();
+  -- no aviso aparece quem vai fazer a aula (e o responsável, se for um dependente)
+  select case when public._participante(a) <> a.nome then public._participante(a) || ' (resp.: ' || a.nome || ')' else a.nome end
+    into v_nome from public.alunos a where a.id = p_aluno and a.user_id = auth.uid();
   if not found then raise exception 'Aluno não encontrado.'; end if;
   if p_plano not in ('mensal','semestral','anual') then raise exception 'Plano inválido.'; end if;
   select nome into v_aula from public.aulas where id = p_aula and ativa;
@@ -1019,10 +1128,10 @@ returns uuid language sql stable security definer set search_path = public, auth
 $$;
 
 revoke all on function public.aluno_cadastro_pendente()                                   from public, anon;
-revoke all on function public.completar_cadastro(uuid, text, text, text, date, text, text) from public, anon;
+revoke all on function public.completar_cadastro(uuid, text, text, text, date, text, boolean, text, date) from public, anon;
 revoke all on function public._usuario_por_email(text)                                    from public, anon, authenticated;
 grant execute on function public.aluno_cadastro_pendente()                                to authenticated;
-grant execute on function public.completar_cadastro(uuid, text, text, text, date, text, text) to authenticated;
+grant execute on function public.completar_cadastro(uuid, text, text, text, date, text, boolean, text, date) to authenticated;
 grant execute on function public._usuario_por_email(text)                                 to service_role;
 grant all on public.alunos, public.gestores to service_role;
 

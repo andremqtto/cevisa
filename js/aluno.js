@@ -5,6 +5,9 @@ import {
   horariosHTML,
 } from './ui.js';
 
+// Nome de quem faz as aulas (dependente) ou, se for o próprio responsável, o nome do cadastro.
+const quem = (a) => a.participante || a.nome;
+
 const DIAS_A_VISTA = 30; // mensalidades que vencem em até 30 dias entram no "total a pagar"
 
 export async function renderPainelAluno(el) {
@@ -56,12 +59,12 @@ export async function renderPainelAluno(el) {
     <div class="pagina-topo">
       <div>
         <h1>Olá, ${esc(nome)}!</h1>
-        <p class="sub">Este é o seu painel de aluno${varios ? ` (${alunos.map((a) => esc(a.nome.split(' ')[0])).join(', ')})` : ''}.</p>
+        <p class="sub">Este é o seu painel${alunos.some((a) => quem(a) !== a.nome) || varios ? ` · aulas de ${alunos.map((a) => esc(quem(a).split(' ')[0])).join(', ')}` : ' de aluno'}.</p>
       </div>
     </div>
 
     ${inativo ? '<div class="aviso alerta">Há um cadastro desativado. Fale com o gestor para regularizar.</div>' : ''}
-    ${alunos.flatMap((a) => (a.solicitacoes || []).map((s) => `<div class="aviso info">Pedido de inscrição em <strong>${esc(s.aula)}${s.turma ? ` — ${esc(s.turma)}` : ''}</strong> (plano ${planoLabel(s.plano)})${varios ? ` para ${esc(a.nome.split(' ')[0])}` : ''} enviado em ${fmtDate(s.created_at.slice(0, 10))}. Aguardando a recepção confirmar.</div>`)).join('')}
+    ${alunos.flatMap((a) => (a.solicitacoes || []).map((s) => `<div class="aviso info">Pedido de inscrição em <strong>${esc(s.aula)}${s.turma ? ` — ${esc(s.turma)}` : ''}</strong> (plano ${planoLabel(s.plano)})${varios || quem(a) !== a.nome ? ` para ${esc(quem(a).split(' ')[0])}` : ''} enviado em ${fmtDate(s.created_at.slice(0, 10))}. Aguardando a recepção confirmar.</div>`)).join('')}
     ${informado ? `<div class="aviso info">Você avisou o pagamento em ${fmtDate(informado.slice(0, 10))}. Assim que o gestor confirmar, este painel será atualizado.</div>` : ''}
 
     <section class="painel-resumo">
@@ -108,7 +111,7 @@ function enviarComprovante(alunos) {
         <p style="margin-top:0">Envie a foto ou o PDF do comprovante de pagamento. A recepção recebe na hora e confirma o pagamento.</p>
         ${alunos.length > 1 ? `
           <label class="campo"><span>Aluno</span>
-            <select name="aluno">${alunos.map((al) => `<option value="${al.id}">${esc(al.nome)}</option>`).join('')}</select></label>`
+            <select name="aluno">${alunos.map((al) => `<option value="${al.id}">${esc(quem(al))}</option>`).join('')}</select></label>`
           : `<input type="hidden" name="aluno" value="${alunos[0].id}">`}
         <label class="arquivo-caixa">
           <input type="file" name="arquivo" accept="image/*,application/pdf">
@@ -179,7 +182,7 @@ function cartaoAula(aluno, m, item, varios, hoje) {
         ${espera ? '<span class="badge alerta">Lista de espera</span>' : `<span class="badge">${planoLabel(m.plano)}</span>`}
       </header>
       ${m.turma ? `<p class="sub" style="margin:0">Turma: <strong>${esc(m.turma)}</strong></p>` : ''}
-      ${varios ? `<p class="sub" style="margin:0">Aluno: <strong>${esc(aluno.nome)}</strong></p>` : ''}
+      ${varios || quem(aluno) !== aluno.nome ? `<p class="sub" style="margin:0">Aluno(a): <strong>${esc(quem(aluno))}</strong></p>` : ''}
       ${horariosHTML(m.horarios) || '<p class="sub" style="margin:0">Horários a confirmar com a recepção.</p>'}
       <dl class="linhas">
         ${espera ? '<div><dt>Situação</dt><dd>Aguardando vaga</dd></div>' : `
@@ -228,7 +231,7 @@ export function abrirPedidoInscricao(aula, turmas, alunos, aoConcluir) {
           : horariosHTML(aula.horarios) ? `<div class="campo"><span style="font-weight:600;font-size:14px">Horários</span>${horariosHTML(aula.horarios)}</div>` : ''}
         ${livres.length > 1 ? `
           <label class="campo"><span>Aluno</span>
-            <select name="aluno">${livres.map((al) => `<option value="${al.id}">${esc(al.nome)}</option>`).join('')}</select></label>`
+            <select name="aluno">${livres.map((al) => `<option value="${al.id}">${esc(quem(al))}</option>`).join('')}</select></label>`
           : `<input type="hidden" name="aluno" value="${livres[0]?.id || ''}">`}
         <fieldset style="border:0;padding:0;margin:0 0 14px">
           <legend style="font-weight:600;font-size:14px;margin-bottom:6px">Escolha o plano</legend>

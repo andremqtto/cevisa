@@ -1,7 +1,7 @@
 // Primeiro acesso: troca da senha temporária e (para alunos) preenchimento do cadastro.
 // Enquanto não concluir, o app não libera nenhuma outra tela.
 import { sb, ok } from './supabase.js';
-import { esc, hojeISO, comBotao } from './ui.js';
+import { esc, hojeISO, comBotao, camposParticipante, ligarParticipante, lerParticipante } from './ui.js';
 
 export async function renderPrimeiroAcesso(el, { trocarSenha, pendentes, aoConcluir }) {
   const aluno = pendentes[0] || null; // um cadastro por vez (normalmente só há um)
@@ -16,7 +16,8 @@ export async function renderPrimeiroAcesso(el, { trocarSenha, pendentes, aoConcl
 
       <form id="f-primeiro" class="card" novalidate>
         ${aluno ? `
-          <h2>Seus dados</h2>
+          <h2>Seus dados (responsável)</h2>
+          <p class="sub" style="margin:-4px 0 12px">Quem tem o acesso ao app e cuida dos pagamentos. Se as aulas forem para um filho ou dependente, informe logo abaixo.</p>
           <label class="campo"><span>Nome completo *</span><input type="text" name="nome" maxlength="120" autocomplete="name" required></label>
           <div class="grade2">
             <label class="campo"><span>Telefone / WhatsApp *</span><input type="tel" name="telefone" maxlength="20" autocomplete="tel" inputmode="tel" required></label>
@@ -25,7 +26,7 @@ export async function renderPrimeiroAcesso(el, { trocarSenha, pendentes, aoConcl
             <label class="campo"><span>E-mail</span><input type="email" value="${esc(aluno.email)}" disabled></label>
           </div>
           <label class="campo"><span>Endereço</span><input type="text" name="endereco" maxlength="200" autocomplete="street-address"></label>
-          <label class="campo"><span>Responsável</span><input type="text" name="responsavel" maxlength="120"><small>Preencha se o aluno for criança ou bebê.</small></label>
+          ${camposParticipante()}
         ` : ''}
         ${trocarSenha ? `
           <h2${aluno ? ' style="margin-top:8px"' : ''}>Sua nova senha</h2>
@@ -45,11 +46,15 @@ export async function renderPrimeiroAcesso(el, { trocarSenha, pendentes, aoConcl
     if (t) el.querySelector('#pa-erro').scrollIntoView({ block: 'center', behavior: 'smooth' });
   };
 
+  if (aluno) ligarParticipante(form);
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    let part = null;
     if (aluno) {
       if (!form.nome.value.trim() || form.nome.value.trim().split(/\s+/).length < 2) return erro('Informe seu nome completo (nome e sobrenome).');
       if (form.telefone.value.replace(/\D/g, '').length < 10) return erro('Informe o telefone com DDD.');
+      try { part = lerParticipante(form); } catch (err) { return erro(err.message); }
     }
     if (trocarSenha) {
       if (form.senha.value.length < 8) return erro('A nova senha precisa ter pelo menos 8 caracteres.');
@@ -67,7 +72,9 @@ export async function renderPrimeiroAcesso(el, { trocarSenha, pendentes, aoConcl
             p_cpf: form.cpf.value.trim() || null,
             p_nascimento: form.nascimento.value || null,
             p_endereco: form.endereco.value.trim() || null,
-            p_responsavel: form.responsavel.value.trim() || null,
+            p_proprio: part.proprio,
+            p_participante: part.nome,
+            p_participante_nasc: part.nascimento,
           }));
         }
         if (trocarSenha) {

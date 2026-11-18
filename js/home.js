@@ -1,6 +1,6 @@
 // Tela inicial: aulas, turmas e preços (pública). Gestores editam tudo aqui.
 import { sb, ok } from './supabase.js';
-import { esc, money, abrirModal, toast, confirmar, comBotao, carregando, vazio, erroBox, planoLabel, horariosHTML } from './ui.js';
+import { esc, money, abrirModal, toast, confirmar, comBotao, carregando, vazio, erroBox, planoLabel, horariosHTML, nomeParticipante } from './ui.js';
 
 const FOTO_MAX = 5 * 1024 * 1024;
 
@@ -71,7 +71,8 @@ function desenhar(el, aulas, ctx) {
 }
 
 function precoBox(rotulo, valor, meses, extra = '') {
-  const porMes = valor && meses > 1 ? `${money(valor / meses)}/mês` : '';
+  // semestral: "6x R$ …" (parcelas); anual: equivalente por mês
+  const porMes = !valor || meses <= 1 ? '' : meses === 6 ? `6x ${money(valor / 6)}` : `${money(valor / meses)}/mês`;
   return `<div class="preco ${extra}"><span>${rotulo}</span><strong>${valor === null || valor === undefined ? 'Consulte' : money(valor)}</strong><small>${porMes}</small></div>`;
 }
 
@@ -129,10 +130,11 @@ function cartao(a, ctx) {
         ${turmas.length ? turmasHTML(turmas, ctx) : horariosHTML(a.horarios)}
         <div class="precos">
           ${precoBox('Mensal', a.preco_mensal, 1)}
-          ${precoBox('Semestral', a.preco_semestral, 6)}
-          ${precoBox('Anual', a.preco_anual, 12)}
+          ${precoBox('Semestral*', a.preco_semestral, 6)}
+          ${precoBox('Anual*', a.preco_anual, 12)}
           ${precoBox('Diária', a.preco_diaria, 1, 'diaria')}
         </div>
+        <p class="precos-obs">* Para contratar os planos semestral ou anual, compareça pessoalmente à recepção.</p>
         ${inscricaoAluno(a, turmas, ctx.alunos)}
         ${isGestor ? `
           ${turmas.length ? '' : `
@@ -154,11 +156,11 @@ async function verAlunos(aula, turmas) {
   const m = abrirModal({ titulo: `Alunos — ${aula.nome}`, largura: 560, corpo: carregando() });
   try {
     const mats = ok(await sb.from('matriculas')
-      .select('id,status,plano,turma_id,created_at,alunos(id,nome,ativo)')
+      .select('id,status,plano,turma_id,created_at,alunos(id,nome,ativo,participante_proprio,participante_nome)')
       .eq('aula_id', aula.id).in('status', ['ativa', 'espera']).order('created_at'));
     const lista = (arr, fila) => arr.length
       ? `<ol style="margin:0;padding-left:22px">${arr.map((x) => `
-          <li style="margin:5px 0"><a href="#/alunos/${x.alunos.id}" data-ir>${esc(x.alunos.nome)}</a>
+          <li style="margin:5px 0"><a href="#/alunos/${x.alunos.id}" data-ir>${esc(nomeParticipante(x.alunos))}</a>${nomeParticipante(x.alunos) !== x.alunos.nome ? ` <small class="sub">(resp.: ${esc(x.alunos.nome)})</small>` : ''}
           <span class="badge">${planoLabel(x.plano)}</span>${x.alunos.ativo ? '' : ' <span class="badge cinza">Desativado</span>'}</li>`).join('')}</ol>`
       : vazio(fila ? 'Ninguém na lista de espera.' : 'Nenhum aluno inscrito.');
     const grupo = (titulo, vagas, doGrupo) => {
