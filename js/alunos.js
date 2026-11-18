@@ -198,7 +198,7 @@ function novoAluno(navegar) {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const email = form.email.value.trim().toLowerCase();
-    if (!/^S+@S+.S+$/.test(email)) return erro('Informe um e-mail válido.');
+    if (!/^\S+@\S+\.\S+$/.test(email)) return erro('Informe um e-mail válido.');
     erro('');
     await comBotao(form.querySelector('[type=submit]'), async () => {
       try {
