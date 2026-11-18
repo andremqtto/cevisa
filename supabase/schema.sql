@@ -122,6 +122,10 @@ alter table public.alunos add column if not exists user_id uuid references auth.
 create index if not exists alunos_user_idx  on public.alunos (user_id);
 create index if not exists alunos_email_idx on public.alunos (lower(email));
 
+-- Cadastro feito pelo admin (só e-mail): o aluno completa os dados no primeiro acesso.
+-- Quem já existia continua como "completo".
+alter table public.alunos add column if not exists cadastro_completo boolean not null default true;
+
 -- Equipe: 'gestor' (principal) e 'admin' (mesmas permissões, mas não gerencia admins).
 -- Quem já estava em gestores continua como gestor principal.
 alter table public.gestores add column if not exists papel text not null default 'gestor';
@@ -536,7 +540,7 @@ declare r jsonb;
 begin
   if auth.uid() is null then raise exception 'Acesso negado.'; end if;
   select coalesce(jsonb_agg(jsonb_build_object(
-           'id', a.id, 'nome', a.nome, 'ativo', a.ativo,
+           'id', a.id, 'nome', a.nome, 'ativo', a.ativo, 'cadastro_completo', a.cadastro_completo,
            'matriculas', coalesce((
               select jsonb_agg(jsonb_build_object(
                        'id', m.id, 'status', m.status, 'plano', m.plano,
@@ -662,6 +666,54 @@ grant execute on function public.adicionar_admin(text, text)     to authenticate
 grant execute on function public.remover_admin(uuid)             to authenticated;
 grant execute on function public.cancelar_convite_admin(text)    to authenticated;
 grant execute on function public.aceitar_convite_admin()         to authenticated;
+
+-- ---------------------------------------------------------------------
+-- Cadastro pelo admin + primeiro acesso do aluno
+-- (as contas são criadas pela Edge Function "criar-usuario", com a chave de serviço)
+-- ---------------------------------------------------------------------
+
+-- Cadastros do aluno logado que ainda precisam ser completados.
+create or replace function public.aluno_cadastro_pendente()
+returns jsonb language sql stable security definer set search_path = public as $$
+  select coalesce(jsonb_agg(jsonb_build_object('id', id, 'email', email) order by created_at), '[]'::jsonb)
+    from public.alunos where user_id = auth.uid() and not cadastro_completo;
+$$;
+
+-- O próprio aluno completa os dados no primeiro acesso.
+create or replace function public.completar_cadastro(
+  p_aluno uuid, p_nome text, p_telefone text, p_cpf text default null, p_nascimento date default null,
+  p_endereco text default null, p_responsavel text default null)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then raise exception 'Acesso negado.'; end if;
+  if nullif(trim(p_nome), '') is null then raise exception 'Informe o nome completo.'; end if;
+  if nullif(trim(p_telefone), '') is null then raise exception 'Informe o telefone.'; end if;
+  if p_nascimento is not null and p_nascimento > current_date then raise exception 'Data de nascimento inválida.'; end if;
+  update public.alunos
+     set nome = left(trim(p_nome), 120),
+         telefone = left(trim(p_telefone), 20),
+         cpf = left(nullif(trim(p_cpf), ''), 14),
+         data_nascimento = p_nascimento,
+         endereco = left(nullif(trim(p_endereco), ''), 200),
+         responsavel = left(nullif(trim(p_responsavel), ''), 120),
+         cadastro_completo = true
+   where id = p_aluno and user_id = auth.uid();
+  if not found then raise exception 'Cadastro não encontrado.'; end if;
+end $$;
+
+-- Uso interno da Edge Function: acha o usuário pelo e-mail.
+create or replace function public._usuario_por_email(p_email text)
+returns uuid language sql stable security definer set search_path = public, auth as $$
+  select id from auth.users where lower(email) = lower(trim(p_email)) limit 1;
+$$;
+
+revoke all on function public.aluno_cadastro_pendente()                                   from public, anon;
+revoke all on function public.completar_cadastro(uuid, text, text, text, date, text, text) from public, anon;
+revoke all on function public._usuario_por_email(text)                                    from public, anon, authenticated;
+grant execute on function public.aluno_cadastro_pendente()                                to authenticated;
+grant execute on function public.completar_cadastro(uuid, text, text, text, date, text, text) to authenticated;
+grant execute on function public._usuario_por_email(text)                                 to service_role;
+grant all on public.alunos, public.gestores to service_role;
 
 revoke all on function public.vincular_aluno()                  from public, anon;
 revoke all on function public.painel_aluno()                    from public, anon;

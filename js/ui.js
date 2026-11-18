@@ -216,6 +216,42 @@ new MutationObserver(() => {
 }).observe(document.body, { childList: true });
 if (vv) vv.addEventListener('resize', () => setTimeout(conferirDigitando, 150));
 
+// ---------------------------------------------------------------- credenciais temporárias
+/** Mostra e-mail + senha temporária com opções de copiar, compartilhar e enviar por WhatsApp. */
+export function mostrarCredenciais({ titulo = 'Acesso criado', email, senha, quem = 'aluno' }) {
+  const site = config.APP_URL || `${location.origin}${location.pathname}`;
+  const proximo = quem === 'aluno'
+    ? 'No primeiro acesso você vai criar sua própria senha e completar seu cadastro.'
+    : 'No primeiro acesso você vai criar sua própria senha.';
+  const mensagem = `Olá! Seu acesso ao app CEVISA:\n\nSite: ${site}\nE-mail: ${email}\nSenha temporária: ${senha}\n\n${proximo}`;
+  const m = abrirModal({
+    titulo,
+    largura: 460,
+    corpo: `
+      <p style="margin-top:0">Passe estes dados para ${quem === 'aluno' ? 'o aluno' : 'a pessoa'}. <strong>A senha não será mostrada de novo</strong>
+        (se perder, é possível gerar outra).</p>
+      <dl class="credenciais">
+        <div><dt>Site</dt><dd>${esc(site)}</dd></div>
+        <div><dt>E-mail</dt><dd>${esc(email)}</dd></div>
+        <div><dt>Senha temporária</dt><dd class="senha">${esc(senha)}</dd></div>
+      </dl>
+      <div class="acoes" style="justify-content:center">
+        <button class="btn sec" type="button" data-copiar>Copiar mensagem</button>
+        <a class="btn sec" href="https://wa.me/?text=${encodeURIComponent(mensagem)}" target="_blank" rel="noopener">Enviar por WhatsApp</a>
+        ${typeof navigator.share === 'function' ? '<button class="btn sec" type="button" data-compartilhar>Compartilhar</button>' : ''}
+        <button class="btn" type="button" data-ok>Pronto</button>
+      </div>`,
+  });
+  m.el.querySelector('[data-copiar]').onclick = async () => {
+    try { await navigator.clipboard.writeText(mensagem); toast('Mensagem copiada.'); } catch { toast('Não foi possível copiar. Anote os dados acima.', 'erro'); }
+  };
+  m.el.querySelector('[data-compartilhar]')?.addEventListener('click', async () => {
+    try { await navigator.share({ title: 'Acesso ao app CEVISA', text: mensagem }); } catch { /* cancelado */ }
+  });
+  m.el.querySelector('[data-ok]').onclick = () => m.fechar();
+  return m;
+}
+
 // ---------------------------------------------------------------- WhatsApp e horários
 /** Link wa.me para o número configurado em config.js, ou null se ainda não houver número. */
 export function linkWhatsApp(mensagem = '') {

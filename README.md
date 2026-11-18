@@ -17,19 +17,25 @@ App de controle de alunos e financeiro da academia. Banco de dados no **Supabase
    select id, 'Nome do gestor' from auth.users where email = 'gestor@exemplo.com';
    ```
    Para dar acesso a outros gestores, repita os dois passos.
-3. Em **Authentication → Sign In / Providers → Email**, deixe **Allow new users to sign up** e **Confirm email** **ligados**. Os alunos criam a própria senha pelo botão *Primeiro acesso*.
-   **Importante:** não desligue o *Confirm email*. É ele que garante que só o dono do e-mail cadastrado na ficha consegue ver os dados daquele aluno.
-4. Em **Authentication → URL Configuration**, configure para onde o link de confirmação leva o aluno:
-   - **Enquanto testa no seu computador:** deixe **Site URL** = `http://localhost:3000` e, em **Redirect URLs**, adicione `http://localhost:3000` e o endereço da rede Wi-Fi usado no celular (ex.: `http://192.168.1.105:3000`).
-   - **Depois de publicar (Vercel):** troque **Site URL** pelo endereço publicado (ex.: `https://cevisa.vercel.app`) e adicione esse endereço também em **Redirect URLs**.
-   - Se o link abrir uma página com erro, o e-mail normalmente já foi confirmado assim mesmo: basta voltar ao app e entrar com e-mail e senha.
+3. Em **Authentication → Sign In / Providers → Email**, **desligue** **Allow new users to sign up**. Ninguém cria conta sozinho: as contas de alunos e admins são criadas pelo app, com senha temporária.
+4. Em **Authentication → URL Configuration**, deixe **Site URL** = endereço publicado (ex.: `https://cevisa.vercel.app`).
+
+### Função "criar-usuario" (obrigatória para cadastrar alunos e admins)
+Criar contas com senha exige a chave secreta do Supabase, que **não pode** ficar no site. Por isso existe uma função que roda no servidor do Supabase:
+1. No Supabase, abra **Edge Functions → Deploy a new function → Via Editor**.
+2. Nome da função: `criar-usuario` (exatamente assim).
+3. Apague o código de exemplo e cole todo o conteúdo de `supabase/functions/criar-usuario/index.ts`.
+4. Clique em **Deploy**. Não é preciso configurar nenhuma chave: o Supabase já fornece as variáveis que a função usa.
+
+Se mudar o arquivo no futuro, abra a função no painel, cole o código novo e publique de novo.
 
 ### Acesso dos alunos
-1. Na ficha do aluno, preencha o **e-mail**.
-2. O aluno abre o app, toca em **Entrar → Primeiro acesso**, informa esse e-mail e cria uma senha.
-3. Ele recebe um e-mail de confirmação; depois de tocar no link, já consegue entrar.
-4. Se um responsável cuida de vários alunos (ex.: dois filhos), use o mesmo e-mail nas fichas: o painel mostra todos.
-5. A ficha mostra se o aluno já tem **acesso ao app**. Se você trocar o e-mail da ficha, o acesso antigo deixa de valer.
+1. Em **Alunos → Novo aluno**, digite só o **e-mail** do aluno (para crianças, o do responsável).
+2. O app mostra uma **senha temporária** com botões para copiar ou enviar por WhatsApp. Passe para o aluno.
+3. No primeiro acesso, o aluno é obrigado a **criar a própria senha** e **completar o cadastro** (nome, telefone e demais dados) antes de usar o app.
+4. Esqueceu a senha? Na ficha do aluno, use **Gerar nova senha**.
+5. Aluno sem e-mail: em **Novo aluno**, use *Cadastrar sem acesso ao app* (cadastro manual, como antes).
+6. A ficha mostra se o aluno já tem **acesso ao app** ou se está **aguardando o 1º acesso**. Se você trocar o e-mail da ficha, o acesso antigo é desligado; use **Criar acesso ao app** na ficha.
 
 ### 3. Conectar o app
 Em **Project Settings → API**, copie a **Project URL** e a chave **anon public** para `js/config.js`.
@@ -48,7 +54,7 @@ Para publicar, envie a pasta inteira para qualquer hospedagem estática (Netlify
 
 **Tela inicial (pública):** aulas com descrição, foto e preços mensal/semestral/anual. Visitantes **não** veem número de vagas. O botão **Entrar** abre o login em uma janela flutuante. Logado como gestor, os cartões ganham **Editar**, **Ver turma** e **Nova aula** (nome, descrição, preços, vagas, foto, ordem, ocultar/exibir).
 
-**Gestor e admins:** quem foi cadastrado como gestor no passo 2 é o **gestor principal**. Só ele vê a aba **Admins**, onde adiciona ou remove admins pelo e-mail. Admins têm as mesmas permissões do gestor, mas não podem adicionar nem remover admins. Se o admin ainda não tem senha, ele cria em **Entrar → Primeiro acesso** com o e-mail cadastrado e passa a ter acesso depois de confirmar o e-mail.
+**Gestor e admins:** quem foi cadastrado como gestor no passo 2 é o **gestor principal**. Só ele vê a aba **Admins**, onde adiciona ou remove admins pelo e-mail. Admins têm as mesmas permissões do gestor, mas não podem adicionar nem remover admins. Ao adicionar um admin, o app gera uma senha temporária; no primeiro acesso ele cria a própria senha. Se o e-mail já tiver conta, ele vira admin na hora.
 
 **Atalho no celular:** ao adicionar o site à tela inicial, o nome sugerido é **CEVISA** e o ícone é o símbolo da logo (`assets/icon-*.png`, `assets/apple-touch-icon.png` e `manifest.webmanifest`).
 

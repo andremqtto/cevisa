@@ -16,6 +16,23 @@ export function ok({ data, error }) {
   return data;
 }
 
+/** Chama a Edge Function "criar-usuario" e devolve o JSON, ou lança erro com mensagem em português. */
+export async function chamarCriarUsuario(corpo) {
+  const { data, error } = await sb.functions.invoke('criar-usuario', { body: corpo });
+  if (!error) return data;
+  let msg = error.message;
+  try {
+    const resp = error.context;
+    if (resp && typeof resp.json === 'function') {
+      if (resp.status === 404) msg = 'A função “criar-usuario” ainda não foi publicada no Supabase (veja o README).';
+      else msg = (await resp.json()).erro || msg;
+    } else if (/Failed to send|fetch/i.test(msg)) {
+      msg = 'Não foi possível falar com o servidor. Confira a internet ou se a função “criar-usuario” foi publicada no Supabase.';
+    }
+  } catch { /* mantém a mensagem original */ }
+  throw new Error(msg);
+}
+
 function traduzErro(err) {
   const m = err.message || 'Erro inesperado.';
   if (err.code === '23503') return 'Não é possível concluir: existem registros ligados a este item.';

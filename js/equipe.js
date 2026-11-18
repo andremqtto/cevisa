@@ -1,7 +1,7 @@
 // Admins: só o gestor principal vê esta aba. Admins têm as mesmas permissões do gestor,
 // mas não podem adicionar nem remover outros admins.
-import { sb, ok } from './supabase.js';
-import { esc, fmtDate, abrirModal, toast, confirmar, comBotao, carregando, vazio, erroBox } from './ui.js';
+import { sb, ok, chamarCriarUsuario } from './supabase.js';
+import { esc, fmtDate, abrirModal, toast, confirmar, comBotao, carregando, vazio, erroBox, mostrarCredenciais } from './ui.js';
 
 export async function renderEquipe(el) {
   el.innerHTML = carregando('Carregando equipe…');
@@ -41,7 +41,7 @@ export async function renderEquipe(el) {
     ${convites.length ? `
     <section class="card">
       <h2>Aguardando primeiro acesso <span class="badge alerta">${convites.length}</span></h2>
-      <p class="sub" style="margin:-6px 0 12px">Estas pessoas viram admins assim que criarem a senha em <strong>Entrar → Primeiro acesso</strong> e confirmarem o e-mail.</p>
+      <p class="sub" style="margin:-6px 0 12px">Convites do método antigo. Para liberar o acesso agora, cancele o convite e adicione o admin de novo (o app gera uma senha temporária).</p>
       <ul class="lista-equipe">${convites.map((c) => `
         <li>
           <div><strong>${esc(c.nome || c.email)}</strong><small>${esc(c.email)} · convidado em ${fmtDate((c.created_at || '').slice(0, 10))}</small></div>
@@ -82,8 +82,8 @@ function adicionarAdmin(aoConcluir) {
         <label class="campo"><span>Nome</span><input type="text" name="nome" maxlength="120" autocomplete="off"></label>
         <label class="campo"><span>E-mail *</span><input type="email" name="email" maxlength="120" inputmode="email" autocapitalize="none" autocomplete="off" required>
           <small>A pessoa entra no app com este e-mail.</small></label>
-        <div class="aviso info">Se a pessoa ainda não tem senha, peça para ela abrir o app, tocar em <strong>Entrar → Primeiro acesso</strong>
-          e criar a senha com este e-mail. Depois de confirmar o e-mail, ela já entra como admin.</div>
+        <div class="aviso info">O app vai gerar uma <strong>senha temporária</strong> para você passar à pessoa. No primeiro acesso ela cria a própria senha.
+          Se o e-mail já tiver conta no app, ela vira admin na hora e continua com a senha que já usa.</div>
         <div id="ad-erro"></div>
         <div class="acoes">
           <button class="btn sec" type="button" data-cancelar>Cancelar</button>
@@ -101,10 +101,11 @@ function adicionarAdmin(aoConcluir) {
     erro('');
     await comBotao(form.querySelector('[type=submit]'), async () => {
       try {
-        const r = ok(await sb.rpc('adicionar_admin', { p_email: email, p_nome: form.nome.value }));
+        const r = await chamarCriarUsuario({ acao: 'criar_admin', email, nome: form.nome.value });
         m.fechar();
-        toast(r === 'ativo' ? 'Admin adicionado. O acesso já está liberado.' : 'Convite criado. A pessoa vira admin ao fazer o primeiro acesso.');
         aoConcluir();
+        if (r.senha) mostrarCredenciais({ titulo: 'Admin criado', email: r.email, senha: r.senha, quem: 'admin' });
+        else toast('Admin adicionado. Ele já pode entrar com a senha que usa hoje.');
       } catch (err) { erro(err.message); }
     });
   });

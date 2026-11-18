@@ -1,8 +1,8 @@
 // Alunos: lista, cadastro, ficha completa, inscrição em aulas, trancamento.
-import { sb, ok } from './supabase.js';
+import { sb, ok, chamarCriarUsuario } from './supabase.js';
 import {
   esc, money, fmtDate, fmtMes, planoLabel, PLANOS, hojeISO, diasEntre, primeiroDiaMes, abrirModal, toast,
-  confirmar, comBotao, carregando, vazio, erroBox,
+  confirmar, comBotao, carregando, vazio, erroBox, mostrarCredenciais,
 } from './ui.js';
 import { registrarPagamento } from './financeiro.js';
 import * as config from './config.js';
@@ -41,7 +41,7 @@ export async function renderAlunos(el, { navegar }) {
   let alunos;
   try {
     alunos = ok(await sb.from('alunos')
-      .select('id,nome,telefone,ativo,created_at, matriculas(id,status,plano,data_fim,aulas(nome))')
+      .select('id,nome,email,telefone,ativo,cadastro_completo,created_at, matriculas(id,status,plano,data_fim,aulas(nome))')
       .order('nome'));
   } catch (e) { el.innerHTML = erroBox(e); return; }
 
@@ -89,7 +89,7 @@ export async function renderAlunos(el, { navegar }) {
         const s = situacao(a.matriculas);
         const vivas = a.matriculas.filter((m) => m.status !== 'encerrada');
         return `<tr class="clicavel" data-id="${a.id}" tabindex="0">
-          <td><strong>${esc(a.nome)}</strong>${a.ativo ? '' : ' <span class="badge cinza">Desativado</span>'}<br><small class="sub">${esc(a.telefone || '')}</small></td>
+          <td><strong>${esc(a.nome)}</strong>${a.ativo ? '' : ' <span class="badge cinza">Desativado</span>'}${a.cadastro_completo === false ? ' <span class="badge alerta">Aguardando 1º acesso</span>' : ''}<br><small class="sub">${esc(a.telefone || '')}</small></td>
           <td>${vivas.length ? vivas.map((m) => `${esc(m.aulas?.nome)}${m.status === 'espera' ? ' <span class="badge alerta">espera</span>' : ''}`).join('<br>') : '—'}</td>
           <td>${vivas.length ? vivas.map((m) => planoLabel(m.plano)).join('<br>') : '—'}</td>
           <td><span class="badge ${s.cls}">${s.txt}</span></td>
@@ -105,7 +105,7 @@ export async function renderAlunos(el, { navegar }) {
   lista.addEventListener('keydown', ir);
   el.querySelector('#busca').addEventListener('input', (e) => { busca = e.target.value; desenhar(); });
   el.querySelector('#filtro').addEventListener('change', (e) => { filtro = e.target.value; desenhar(); });
-  el.querySelector('#novo').addEventListener('click', () => editarAluno(null, (novo) => navegar(`#/alunos/${novo.id}`)));
+  el.querySelector('#novo').addEventListener('click', () => novoAluno(navegar));
   el.querySelector('#qr').addEventListener('click', abrirQrCode);
   desenhar();
 }
@@ -173,6 +173,44 @@ async function abrirQrCode() {
   });
 }
 
+// ================================================================== NOVO ALUNO (só e-mail + senha temporária)
+function novoAluno(navegar) {
+  const m = abrirModal({
+    titulo: 'Novo aluno',
+    largura: 460,
+    corpo: `
+      <form id="f-novo" novalidate>
+        <label class="campo"><span>E-mail do aluno *</span><input type="email" name="email" maxlength="120" inputmode="email" autocapitalize="none" autocomplete="off" required>
+          <small>Para crianças e bebês, use o e-mail do responsável.</small></label>
+        <div class="aviso info">O app vai gerar uma <strong>senha temporária</strong> para você passar ao aluno. No primeiro acesso ele cria a própria senha e completa o cadastro.</div>
+        <div id="n-erro"></div>
+        <div class="acoes">
+          <button class="btn sec" type="button" data-cancelar>Cancelar</button>
+          <button class="btn" type="submit">Criar acesso</button>
+        </div>
+        <p class="login-troca">Aluno sem e-mail? <button type="button" class="link" data-manual>Cadastrar sem acesso ao app</button></p>
+      </form>`,
+  });
+  const form = m.el.querySelector('#f-novo');
+  const erro = (t) => { m.el.querySelector('#n-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
+  m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
+  m.el.querySelector('[data-manual]').onclick = () => { m.fechar(); editarAluno(null, (novo) => navegar(`#/alunos/${novo.id}`)); };
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = form.email.value.trim().toLowerCase();
+    if (!/^S+@S+.S+$/.test(email)) return erro('Informe um e-mail válido.');
+    erro('');
+    await comBotao(form.querySelector('[type=submit]'), async () => {
+      try {
+        const r = await chamarCriarUsuario({ acao: 'criar_aluno', email });
+        m.fechar();
+        navegar(`#/alunos/${r.aluno_id}`);
+        setTimeout(() => mostrarCredenciais({ email: r.email, senha: r.senha }), 400);
+      } catch (err) { erro(err.message); }
+    });
+  });
+}
+
 // ================================================================== CADASTRO / EDIÇÃO
 export function editarAluno(aluno, aoSalvar) {
   const novo = !aluno;
@@ -187,7 +225,7 @@ export function editarAluno(aluno, aoSalvar) {
           <label class="campo"><span>CPF</span><input type="text" name="cpf" inputmode="numeric" maxlength="14" value="${esc(a.cpf)}"></label>
           <label class="campo"><span>Data de nascimento</span><input type="date" name="data_nascimento" max="${hojeISO()}" value="${esc(a.data_nascimento)}"></label>
           <label class="campo"><span>Telefone / WhatsApp</span><input type="tel" name="telefone" maxlength="20" value="${esc(a.telefone)}"></label>
-          <label class="campo"><span>E-mail</span><input type="email" name="email" maxlength="120" inputmode="email" autocapitalize="none" value="${esc(a.email)}"><small>O aluno usa este e-mail para entrar no app.</small></label>
+          <label class="campo"><span>E-mail</span><input type="email" name="email" maxlength="120" inputmode="email" autocapitalize="none" value="${esc(a.email)}"><small>É o login do aluno no app. Se trocar, o acesso atual é desligado e será preciso usar “Criar acesso ao app” na ficha.</small></label>
         </div>
         <label class="campo"><span>Responsável</span><input type="text" name="responsavel" maxlength="120" value="${esc(a.responsavel)}"><small>Para bebês e crianças.</small></label>
         <label class="campo"><span>Endereço</span><input type="text" name="endereco" maxlength="200" value="${esc(a.endereco)}"></label>
@@ -261,10 +299,11 @@ export async function renderFicha(el, id, { navegar }) {
       <div>
         <h1>${esc(aluno.nome)} <span class="badge ${aluno.ativo ? 'ok' : 'cinza'}" style="vertical-align:middle">${aluno.ativo ? 'Ativo' : 'Desativado'}</span></h1>
         <p class="sub"><span class="badge ${s.cls}">${s.txt}</span> · cliente desde ${fmtDate((aluno.created_at || '').slice(0, 10))} · total pago ${money(totalPago)}
-          · ${aluno.user_id ? '<span class="badge ok">Acesso ao app ativo</span>' : aluno.email ? '<span class="badge cinza">Ainda não acessou o app</span>' : '<span class="badge alerta">Sem e-mail: cadastre um para liberar o app</span>'}</p>
+          · ${aluno.user_id && aluno.cadastro_completo === false ? '<span class="badge alerta">Aguardando 1º acesso do aluno</span>' : aluno.user_id ? '<span class="badge ok">Acesso ao app ativo</span>' : aluno.email ? '<span class="badge cinza">Ainda não acessou o app</span>' : '<span class="badge alerta">Sem e-mail: cadastre um para liberar o app</span>'}</p>
       </div>
       <div class="acoes-linha no-print">
         <button class="btn sec" type="button" id="editar">Editar dados</button>
+        ${aluno.user_id ? '<button class="btn sec" type="button" id="nova-senha">Gerar nova senha</button>' : aluno.email ? '<button class="btn sec" type="button" id="criar-acesso">Criar acesso ao app</button>' : ''}
         <button class="btn sec ${aluno.ativo ? 'perigo' : ''}" type="button" id="alternar">${aluno.ativo ? 'Desativar aluno' : 'Ativar aluno'}</button>
         <button class="btn" type="button" id="inscrever">＋ Inscrever em aula</button>
       </div>
@@ -305,6 +344,20 @@ export async function renderFicha(el, id, { navegar }) {
 
   // ---- ações
   el.querySelector('#editar').onclick = () => editarAluno(aluno, recarregar);
+  el.querySelector('#nova-senha')?.addEventListener('click', async (e) => {
+    if (!(await confirmar(`Gerar uma nova senha temporária para ${aluno.nome}? A senha atual dele deixa de funcionar.`, { titulo: 'Nova senha', confirmarTexto: 'Gerar nova senha' }))) return;
+    await comBotao(e.currentTarget, async () => {
+      const r = await chamarCriarUsuario({ acao: 'nova_senha', user_id: aluno.user_id });
+      mostrarCredenciais({ titulo: 'Nova senha temporária', email: r.email || aluno.email, senha: r.senha });
+    });
+  });
+  el.querySelector('#criar-acesso')?.addEventListener('click', async (e) => {
+    await comBotao(e.currentTarget, async () => {
+      const r = await chamarCriarUsuario({ acao: 'criar_aluno', email: aluno.email });
+      recarregar();
+      mostrarCredenciais({ email: r.email, senha: r.senha });
+    });
+  });
   el.querySelector('#alternar').onclick = async (e) => {
     const novoEstado = !aluno.ativo;
     if (!novoEstado && !(await confirmar(`Desativar ${aluno.nome}? As matrículas continuam registradas, mas o aluno fica marcado como inativo.`, { titulo: 'Desativar aluno', confirmarTexto: 'Desativar', perigo: true }))) return;

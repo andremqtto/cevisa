@@ -6,7 +6,8 @@ import { iniciarNotificacoes, pararNotificacoes } from './notificacoes.js';
 
 // papel: 'gestor' (gestor principal ou admin) | 'aluno' | null (visitante)
 // principal: true só para o gestor principal (pode gerenciar admins)
-const estado = { papel: null, email: null, principal: false };
+// trocarSenha: entrou com senha temporária; cadastrosPendentes: fichas que o aluno ainda precisa completar
+const estado = { papel: null, email: null, principal: false, erroVinculo: null, trocarSenha: false, cadastrosPendentes: [] };
 let renderizadoComo; // evita redesenhar à toa quando o Supabase reemite SIGNED_IN
 const raiz = document.getElementById('app');
 
@@ -31,7 +32,19 @@ function navegar(hash) {
 }
 
 // ------------------------------------------------------------------ cabeçalho
-function desenharTopo(rotaAtual) {
+function desenharTopo(rotaAtual, { bloqueado = false } = {}) {
+  // bloqueado: primeiro acesso pendente — só mostra o botão Sair
+  if (bloqueado) {
+    pararNotificacoes();
+    document.getElementById('topo').innerHTML = `
+      <div class="topo-in">
+        <span class="logo"><img src="assets/logo.png" alt="Spa Médico Adventista Cevisa"></span>
+        <nav class="nav" aria-label="Principal"></nav>
+        <div class="topo-acoes"><button class="btn sec pequeno" id="btn-sair" type="button">Sair</button></div>
+      </div>`;
+    document.getElementById('btn-sair').addEventListener('click', sair);
+    return;
+  }
   const nav = (ROTAS[estado.papel] || [])
     .filter((r) => !r.soPrincipal || estado.principal)
     .map((r) => `<a href="#/${r.rota}" class="${r.rota === rotaAtual ? 'atual' : ''}">${r.rotulo}</a>`).join('');
@@ -72,41 +85,28 @@ function atualizarWhatsApp() {
   document.body.appendChild(balao);
 }
 
-// ------------------------------------------------------------------ login e primeiro acesso
-export function abrirLogin(modo = 'entrar') {
+// ------------------------------------------------------------------ login
+// Não há cadastro pelo próprio aluno: gestores/admins criam o acesso com senha temporária.
+export function abrirLogin() {
   if (document.querySelector('#f-login')) return;
-  const m = abrirModal({ titulo: 'Entrar', largura: 420, corpo: '' });
-  const tituloEl = m.el.closest('.modal').querySelector('.modal-topo h2');
-
-  function desenhar(modoAtual, aviso = '') {
-    const primeiro = modoAtual === 'primeiro';
-    tituloEl.textContent = primeiro ? 'Primeiro acesso' : 'Entrar';
-    m.el.innerHTML = `
+  const m = abrirModal({
+    titulo: 'Entrar',
+    largura: 420,
+    corpo: `
       <img class="login-logo" src="assets/logo.png" alt="Spa Médico Adventista Cevisa">
-      <p class="sub" style="text-align:center;margin:0 0 16px">${primeiro
-        ? 'Alunos e admins: crie sua senha usando o e-mail que foi cadastrado para você.'
-        : 'Acesso para alunos e gestores.'}</p>
-      ${aviso}
+      <p class="sub" style="text-align:center;margin:0 0 16px">Acesso para alunos e equipe.<br>Recebeu uma senha temporária? Use-a aqui.</p>
       <form id="f-login" novalidate>
-        <label class="campo"><span>E-mail</span><input type="email" name="email" inputmode="email" autocapitalize="none" autocomplete="${primeiro ? 'email' : 'username'}" required></label>
-        <label class="campo"><span>${primeiro ? 'Crie uma senha' : 'Senha'}</span><input type="password" name="senha" autocomplete="${primeiro ? 'new-password' : 'current-password'}" required>${primeiro ? '<small>Mínimo de 6 caracteres.</small>' : ''}</label>
-        ${primeiro ? '<label class="campo"><span>Repita a senha</span><input type="password" name="senha2" autocomplete="new-password" required></label>' : ''}
+        <label class="campo"><span>E-mail</span><input type="email" name="email" inputmode="email" autocapitalize="none" autocomplete="username" required></label>
+        <label class="campo"><span>Senha</span><input type="password" name="senha" autocomplete="current-password" required></label>
         <div id="login-erro"></div>
-        <div class="acoes"><button class="btn" type="submit" style="width:100%">${primeiro ? 'Criar acesso' : 'Entrar'}</button></div>
+        <div class="acoes"><button class="btn" type="submit" style="width:100%">Entrar</button></div>
       </form>
-      <p class="login-troca">${primeiro
-        ? 'Já tem senha? <button type="button" class="link" data-modo="entrar">Entrar</button>'
-        : 'Aluno sem senha ainda? <button type="button" class="link" data-modo="primeiro">Primeiro acesso</button>'}</p>`;
-    const form = m.el.querySelector('#f-login');
-    const erro = (t) => { m.el.querySelector('#login-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
-    m.el.querySelector('[data-modo]').onclick = (e) => desenhar(e.currentTarget.dataset.modo);
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      (primeiro ? criarAcesso : entrar)(form, erro);
-    });
-  }
-
-  async function entrar(form, erro) {
+      <p class="login-troca">Ainda não tem acesso ou esqueceu a senha? Fale com a recepção.</p>`,
+  });
+  const form = m.el.querySelector('#f-login');
+  const erro = (t) => { m.el.querySelector('#login-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
     const email = form.email.value.trim();
     const senha = form.senha.value;
     if (!email || !senha) return erro('Informe e-mail e senha.');
@@ -117,58 +117,33 @@ export function abrirLogin(modo = 'entrar') {
         const papel = await verificarPapel();
         if (!papel) {
           await sb.auth.signOut();
-          return erro('Não encontramos um cadastro de aluno com este e-mail. Confira o e-mail ou procure a recepção.');
+          return erro(msgSemCadastro());
         }
         m.fechar();
         await rotear();
-        toast(papel === 'aluno' ? 'Bem-vindo(a) ao seu painel!' : 'Bem-vindo(a)!');
+        if (!primeiroAcessoPendente()) toast(papel === 'aluno' ? 'Bem-vindo(a) ao seu painel!' : 'Bem-vindo(a)!');
       } catch (err) {
-        erro(/Email not confirmed/i.test(err.message)
-          ? 'Seu e-mail ainda não foi confirmado. Abra o link que enviamos para o seu e-mail e tente de novo.'
-          : err.message);
+        erro(err.message);
       }
     });
-  }
-
-  async function criarAcesso(form, erro) {
-    const email = form.email.value.trim();
-    const senha = form.senha.value;
-    if (!/^\S+@\S+\.\S+$/.test(email)) return erro('Informe um e-mail válido.');
-    if (senha.length < 6) return erro('A senha precisa ter pelo menos 6 caracteres.');
-    if (senha !== form.senha2.value) return erro('As senhas não conferem.');
-    erro('');
-    await comBotao(form.querySelector('[type=submit]'), async () => {
-      try {
-        const r = ok(await sb.auth.signUp({ email, password: senha, options: { emailRedirectTo: location.origin + location.pathname } }));
-        if (r.user && Array.isArray(r.user.identities) && r.user.identities.length === 0) {
-          return erro('Este e-mail já tem acesso. Use “Entrar”.');
-        }
-        if (r.session) { // projeto sem confirmação de e-mail
-          const papel = await verificarPapel();
-          if (!papel) { await sb.auth.signOut(); return erro('Não encontramos um cadastro de aluno com este e-mail. Procure a recepção.'); }
-          m.fechar();
-          await rotear();
-          return;
-        }
-        desenhar('entrar', `<div class="aviso info">Quase lá! Enviamos um link de confirmação para <strong>${esc(email)}</strong>.
-          Abra seu e-mail, toque no link e depois entre aqui com seu e-mail e senha.</div>`);
-      } catch (err) {
-        erro(/signups? not allowed|signup is disabled/i.test(err.message)
-          ? 'O cadastro de alunos ainda não está liberado. Fale com a recepção.'
-          : err.message);
-      }
-    });
-  }
-
-  desenhar(modo);
+  });
 }
+
+/** Precisa trocar a senha temporária e/ou completar o cadastro antes de usar o app? */
+const primeiroAcessoPendente = () => estado.trocarSenha || estado.cadastrosPendentes.length > 0;
+
+const msgSemCadastro = () => estado.erroVinculo
+  ? `Não foi possível verificar seu cadastro (erro no banco: ${estado.erroVinculo}). Avise a recepção.`
+  : 'Esta conta não está ligada a nenhum aluno. Fale com a recepção.';
 
 /** Descobre se o usuário logado é gestor, aluno ou nenhum dos dois. */
 async function verificarPapel() {
   const { data: { session } } = await sb.auth.getSession();
   estado.principal = false;
-  if (!session) { estado.papel = null; estado.email = null; return null; }
+  estado.cadastrosPendentes = [];
+  if (!session) { estado.papel = null; estado.email = null; estado.trocarSenha = false; return null; }
   estado.email = session.user.email;
+  estado.trocarSenha = session.user.user_metadata?.trocar_senha === true;
   const buscarEquipe = async () => {
     const { data, error } = await sb.from('gestores').select('user_id,papel').eq('user_id', session.user.id).maybeSingle();
     if (!error) return data;
@@ -188,8 +163,15 @@ async function verificarPapel() {
     return (estado.papel = 'gestor');
   }
   const { data: qtd, error: e2 } = await sb.rpc('vincular_aluno');
+  estado.erroVinculo = e2 ? e2.message : null;
   if (e2) console.warn('vincular_aluno:', e2.message);
-  return (estado.papel = !e2 && qtd > 0 ? 'aluno' : null);
+  estado.papel = !e2 && qtd > 0 ? 'aluno' : null;
+  if (estado.papel === 'aluno') {
+    const { data: pend, error: e3 } = await sb.rpc('aluno_cadastro_pendente');
+    if (e3) console.warn('aluno_cadastro_pendente:', e3.message);
+    estado.cadastrosPendentes = Array.isArray(pend) ? pend : [];
+  }
+  return estado.papel;
 }
 
 async function sair() {
@@ -214,6 +196,21 @@ async function rotear() {
     window.scrollTo(0, 0);
     await renderHome(raiz, { isGestor: false });
     if (ROTAS_GESTOR.includes(rota)) abrirLogin();
+    return;
+  }
+
+  // Primeiro acesso: obrigatório criar a própria senha e (aluno) completar o cadastro.
+  if (primeiroAcessoPendente()) {
+    if (rota) history.replaceState(null, '', '#/');
+    desenharTopo('', { bloqueado: true });
+    window.scrollTo(0, 0);
+    const { renderPrimeiroAcesso } = await import('./primeiro-acesso.js');
+    if (minha !== versaoRota) return;
+    await renderPrimeiroAcesso(raiz, {
+      trocarSenha: estado.trocarSenha,
+      pendentes: estado.cadastrosPendentes,
+      aoConcluir: async () => { await verificarPapel(); await rotear(); toast('Tudo pronto! Bem-vindo(a) ao app CEVISA.'); },
+    });
     return;
   }
 
@@ -277,7 +274,7 @@ async function iniciar() {
   if (session && !estado.papel) {
     // logou (ex.: pelo link de confirmação) mas não há cadastro de aluno com este e-mail
     await sb.auth.signOut();
-    toast('Não encontramos um cadastro de aluno com este e-mail. Procure a recepção.', 'erro');
+    toast(msgSemCadastro(), 'erro');
   }
   if (linkComErro) {
     history.replaceState(null, '', '#/');
