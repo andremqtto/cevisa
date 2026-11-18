@@ -1,5 +1,6 @@
 // Painel do aluno: aulas contratadas, horários, valores, vencimento e aviso de pagamento.
 import { sb, ok, chamarFuncao } from './supabase.js';
+import * as config from './config.js';
 import {
   esc, money, fmtDate, planoLabel, PLANOS, hojeISO, diasEntre, abrirModal, toast, comBotao, carregando, vazio, erroBox,
   horariosHTML,
@@ -83,6 +84,7 @@ export async function renderPainelAluno(el) {
           <div class="venc">Você não tem planos ativos no momento.</div>`}
       </div>
       <div class="painel-botoes">
+        ${config.PIX_CHAVE ? `<button class="btn pix" type="button" id="pagar-pix">${ICONE_PIX}Pagar com Pix</button>` : ''}
         <button class="btn claro" type="button" id="ja-paguei" ${itens.length ? '' : 'disabled'}>Já paguei</button>
         <button class="btn sec-claro" type="button" id="comprovante" ${alunos.length ? '' : 'disabled'}>${ICONE_CLIPE}Enviar comprovante</button>
       </div>
@@ -94,6 +96,54 @@ export async function renderPainelAluno(el) {
 
   el.querySelector('#ja-paguei').onclick = () => informarPagamento({ total, vencimento: vencimento || proximo, aPagar }, () => renderPainelAluno(el));
   el.querySelector('#comprovante').onclick = () => enviarComprovante(alunos);
+  el.querySelector('#pagar-pix')?.addEventListener('click', () => pagarComPix({ total: aPagar.length ? total : null, vencimento }, () => enviarComprovante(alunos)));
+}
+
+// ------------------------------------------------------------------ Pix
+const ICONE_PIX = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5 21.5 12 12 21.5 2.5 12z"/><path d="M7.5 7.5 12 12l4.5-4.5M7.5 16.5 12 12l4.5 4.5"/></svg>';
+
+/** Janela com a chave Pix, o valor a pagar, o botão de copiar e o passo a passo. */
+function pagarComPix({ total, vencimento }, abrirComprovante) {
+  const m = abrirModal({
+    titulo: 'Pagar com Pix',
+    largura: 440,
+    corpo: `
+      ${total ? `<div class="pix-valor"><span>Valor a pagar</span><strong>${money(total)}</strong>${vencimento ? `<small>vencimento ${fmtDate(vencimento)}</small>` : ''}</div>` : ''}
+      <div class="pix-chave">
+        <span>Chave Pix (${esc(config.PIX_TIPO || 'chave')})</span>
+        <strong>${esc(config.PIX_EXIBICAO || config.PIX_CHAVE)}</strong>
+        <small>Spa Médico Adventista Cevisa</small>
+      </div>
+      <button class="btn pix largo" type="button" data-copiar>${ICONE_PIX}Copiar chave Pix</button>
+      <ol class="pix-passos">
+        <li>Abra o app do seu banco e escolha <strong>Pix → Pagar com chave</strong>${config.PIX_TIPO ? ` (${esc(config.PIX_TIPO)})` : ''}.</li>
+        <li>Cole a chave${total ? ` e informe o valor de <strong>${money(total)}</strong>` : ''}. Confira o nome do recebedor antes de confirmar.</li>
+        <li>Depois de pagar, envie o comprovante por aqui. A recepção confere e dá baixa.</li>
+      </ol>
+      <div class="acoes">
+        <button class="btn sec" type="button" data-fechar-pix>Fechar</button>
+        <button class="btn" type="button" data-comprovante>Já paguei: enviar comprovante</button>
+      </div>`,
+  });
+  const copiar = m.el.querySelector('[data-copiar]');
+  copiar.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(config.PIX_CHAVE);
+    } catch {
+      // navegador sem permissão de área de transferência: seleciona o texto para copiar à mão
+      const sel = window.getSelection();
+      const r = document.createRange();
+      r.selectNodeContents(m.el.querySelector('.pix-chave strong'));
+      sel.removeAllRanges(); sel.addRange(r);
+      toast('Toque e segure a chave selecionada para copiar.', 'erro');
+      return;
+    }
+    copiar.innerHTML = `${ICONE_PIX}Chave copiada ✓`;
+    copiar.classList.add('copiado');
+    toast('Chave Pix copiada! Agora cole no app do seu banco.');
+  };
+  m.el.querySelector('[data-fechar-pix]').onclick = () => m.fechar();
+  m.el.querySelector('[data-comprovante]').onclick = () => { m.fechar(); abrirComprovante(); };
 }
 
 // ------------------------------------------------------------------ comprovante

@@ -316,6 +316,19 @@ ol .prof-aluno .prof-zap { float: right; }
 .participante .check { font-weight: 500; }
 .participante-linha { margin: 4px 0 0; color: var(--texto); }
 
+/* ------------------------------------------------------------ Pix */
+.btn.pix { background: #32bcad; color: #06352f; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.btn.pix:hover { background: #27a597; }
+.btn.pix.copiado { background: var(--ok); color: #fff; }
+.btn.pix svg { width: 20px; height: 20px; flex: none; }
+.pix-valor { text-align: center; margin-bottom: 12px; }
+.pix-valor span, .pix-chave span { display: block; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--suave); }
+.pix-valor strong { display: block; font-size: 30px; color: var(--azul); }
+.pix-valor small, .pix-chave small { color: var(--suave); }
+.pix-chave { border: 2px dashed #32bcad; border-radius: 12px; padding: 12px; text-align: center; margin-bottom: 12px; background: #effaf8; }
+.pix-chave strong { display: block; font-size: 22px; letter-spacing: .02em; color: var(--texto); user-select: all; word-break: break-all; }
+.pix-passos { margin: 16px 0 4px; padding-left: 20px; display: grid; gap: 6px; font-size: 14.5px; }
+
 /* ------------------------------------------------------------ zona de perigo */
 .zona-perigo { border-color: #f1c3bf; background: #fffafa; }
 .zona-perigo > h2 { color: var(--erro); }
