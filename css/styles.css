@@ -112,7 +112,7 @@ main { max-width: 1160px; margin: 0 auto; padding: 28px 20px 60px; }
 .campo > span { display: block; font-weight: 600; font-size: 14px; margin-bottom: 4px; }
 .campo small { display: block; color: var(--suave); margin-top: 3px; }
 input[type=text], input[type=email], input[type=password], input[type=tel], input[type=number],
-input[type=date], input[type=month], select, textarea {
+input[type=date], input[type=month], input[type=search], select, textarea {
   width: 100%; padding: 10px 12px; border: 1.5px solid var(--borda); border-radius: 10px; background: #fff;
 }
 input:focus, select:focus, textarea:focus { border-color: var(--azul-claro); outline: none; box-shadow: 0 0 0 3px rgba(91, 196, 229, .35); }
@@ -228,13 +228,97 @@ td.num, th.num { text-align: right; white-space: nowrap; }
 .setup { max-width: 640px; margin: 60px auto; background: #fff; border-radius: 18px; padding: 28px; border: 1px solid var(--borda); }
 .setup code { background: var(--azul-fundo); padding: 2px 6px; border-radius: 6px; }
 
+/* grades que nunca estouram a largura de telas estreitas */
+.grade-aulas { grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); }
+.dados { grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr)); }
+.modal { max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); }
+
+/* evita hover "grudado" depois de um toque */
+@media (hover: none) {
+  .nav a:hover:not(.atual), .icone-btn:hover, .notif:hover, tbody tr.clicavel:hover { background: none; }
+  .btn.sec:hover { background: #fff; }
+  .btn:not(.sec):not(.claro):not(.perigo):hover { background: var(--azul); }
+  tbody tr.clicavel:active, .notif:active { background: var(--azul-fundo); }
+}
+
+/* ------------------------------------------------------------ celular */
 @media (max-width: 720px) {
-  .topo-in { flex-wrap: wrap; gap: 8px 12px; padding: 8px 14px; }
+  .topo-in { gap: 10px; padding: 8px 14px; padding-left: max(14px, env(safe-area-inset-left)); padding-right: max(14px, env(safe-area-inset-right)); }
   .logo img { height: 38px; }
-  .nav { order: 3; flex-basis: 100%; }
-  main { padding: 20px 14px 50px; }
+  main { padding: 18px 14px 40px; }
   .grade2, .grade3 { grid-template-columns: 1fr; }
   .pagina-topo h1 { font-size: 24px; }
+  .grade-aulas { gap: 16px; }
+  .card { padding: 16px 14px; border-radius: 14px; }
+  .card > h2 { font-size: 18px; }
+
+  /* navegação do gestor vira barra inferior, ao alcance do polegar */
+  .nav {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    background: var(--card); border-top: 1px solid var(--borda); box-shadow: 0 -4px 16px rgba(1, 59, 102, .08);
+    gap: 4px; padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    overflow: visible;
+  }
+  .nav:empty { display: none; }
+  .nav a { flex: 1; text-align: center; padding: 10px 4px; font-size: 14px; min-height: 44px; display: grid; place-items: center; border-radius: 12px; }
+  .topo:has(.nav a) ~ main { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+  .topo:has(.nav a) ~ #toasts { bottom: calc(80px + env(safe-area-inset-bottom)); }
+
+  /* alvos de toque maiores */
+  .btn { min-height: 44px; }
+  .btn.pequeno { min-height: 38px; padding: 8px 12px; }
+  .icone-btn { width: 44px; height: 44px; }
+  .chip button { padding: 6px 10px; }
+  .check input { width: 22px; height: 22px; }
+  input[type=text], input[type=email], input[type=password], input[type=tel], input[type=number],
+  input[type=date], input[type=month], input[type=search], select, textarea { font-size: 16px; min-height: 44px; } /* 16px evita zoom no iOS */
+  .acoes .btn { flex: 1 1 auto; }
+
+  /* filtros e abas */
+  .filtros input[type=search], .filtros input[type=text] { flex-basis: 100%; max-width: none; min-width: 0; }
+  .filtros select { flex: 1; }
+  .abas { flex-wrap: nowrap; overflow-x: auto; max-width: 100%; scrollbar-width: none; }
+  .abas::-webkit-scrollbar { display: none; }
+  .abas button { white-space: nowrap; min-height: 38px; }
+
+  /* indicadores em 2 colunas */
+  .resumo { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .kpi { padding: 14px; border-radius: 14px; }
+  .kpi strong { font-size: 22px; word-break: break-word; }
+
+  /* notificações ocupam a largura da tela */
+  .painel-notif { position: fixed; top: 60px; left: 10px; right: 10px; width: auto; max-height: calc(100dvh - 140px); }
+
+  /* modal vira "folha" que sobe de baixo */
+  .modal-fundo { place-items: end center; padding: 24px 0 0; }
+  .modal { max-width: 100% !important; border-radius: 18px 18px 0 0; max-height: 92vh; max-height: 92dvh; }
+  .modal-topo { padding: 10px 8px 8px 18px; }
+  .modal-corpo { padding: 16px 16px calc(20px + env(safe-area-inset-bottom)); }
+
+  #toasts { bottom: calc(14px + env(safe-area-inset-bottom)); }
+}
+
+/* tabelas viram cartões empilhados (rótulos vêm de data-label, ver ui.js) */
+@media (max-width: 640px) {
+  .tabela-wrap { overflow: visible; }
+  .tabela-wrap table, .tabela-wrap tbody, .tabela-wrap tfoot, .tabela-wrap tr, .tabela-wrap td { display: block; width: 100%; }
+  .tabela-wrap thead { display: none; }
+  .tabela-wrap tr { border: 1px solid var(--borda); border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; background: var(--card); }
+  .tabela-wrap tfoot tr { background: var(--azul-fundo); border-color: transparent; }
+  .tabela-wrap td { border: 0; padding: 5px 0; text-align: right; overflow: hidden; }
+  .tabela-wrap td::before {
+    content: attr(data-label); float: left; margin-right: 12px; text-align: left;
+    font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--suave); line-height: 1.9;
+  }
+  .tabela-wrap td[data-label=""]::before, .tabela-wrap td:not([data-label])::before { content: none; }
+  .tabela-wrap tbody td:first-child { text-align: left; font-size: 16px; padding-bottom: 8px; margin-bottom: 4px; border-bottom: 1px solid var(--borda); }
+  .tabela-wrap tbody td:first-child::before { float: none; display: block; line-height: 1.4; }
+  .tabela-wrap td:empty { display: none; }
+  .tabela-wrap td[data-label=""] { text-align: left; padding-top: 8px; }
+  .tabela-wrap td[data-label=""] .btn { width: 100%; text-align: center; }
+  .tabela-wrap .acoes-linha { justify-content: stretch; }
+  .tabela-wrap .acoes-linha .btn { flex: 1 1 auto; }
+  .tabela-wrap td.vazio, .tabela-wrap td[colspan] { text-align: left; }
 }
 
 @media print {

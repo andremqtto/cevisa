@@ -95,8 +95,11 @@ export function abrirModal({ titulo, corpo, largura = 520, aoFechar }) {
   document.body.appendChild(fundo);
   document.body.classList.add('sem-scroll');
   pilhaModais.push(api);
-  const primeiro = corpoEl.querySelector('input:not([type=hidden]), select, textarea, button');
-  primeiro?.focus();
+  // No celular, focar um campo abre o teclado e cobre o modal; só foca automaticamente com mouse/teclado.
+  if (matchMedia('(hover: hover)').matches) {
+    const primeiro = corpoEl.querySelector('input:not([type=hidden]), select, textarea, button');
+    primeiro?.focus();
+  }
   return api;
 }
 
@@ -142,6 +145,27 @@ export async function comBotao(btn, fn) {
     btn.textContent = texto;
   }
 }
+
+// ---------------------------------------------------------------- tabelas responsivas
+// Copia o texto de cada <th> para data-label das células, para o CSS exibir as linhas como cartões no celular.
+function rotularTabelas() {
+  document.querySelectorAll('.tabela-wrap table').forEach((tabela) => {
+    const titulos = [...tabela.querySelectorAll('thead th')].map((th) => th.textContent.trim());
+    tabela.querySelectorAll('tbody tr, tfoot tr').forEach((tr) => {
+      let col = 0;
+      [...tr.cells].forEach((td) => {
+        if (td.colSpan === 1 && !td.hasAttribute('data-label')) td.dataset.label = titulos[col] ?? '';
+        col += td.colSpan;
+      });
+    });
+  });
+}
+let rotularAgendado = false;
+new MutationObserver(() => {
+  if (rotularAgendado) return;
+  rotularAgendado = true;
+  requestAnimationFrame(() => { rotularAgendado = false; rotularTabelas(); });
+}).observe(document.body, { childList: true, subtree: true });
 
 export const carregando = (txt = 'Carregando…') => `<div class="carregando"><span class="spinner"></span>${esc(txt)}</div>`;
 export const vazio = (txt) => `<p class="vazio">${esc(txt)}</p>`;
