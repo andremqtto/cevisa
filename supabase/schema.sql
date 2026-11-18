@@ -187,6 +187,9 @@ $$;
 alter table public.convites_admin enable row level security;
 drop policy if exists convites_principal on public.convites_admin;
 create policy convites_principal on public.convites_admin for select to authenticated using (public.is_gestor_principal());
+-- Só leitura pela API (quem pode ver é decidido pela política acima);
+-- criar/cancelar convites é feito pelas funções adicionar_admin / cancelar_convite_admin.
+grant select on public.convites_admin to authenticated;
 
 alter table public.gestores     enable row level security;
 alter table public.aulas        enable row level security;
