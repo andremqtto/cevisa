@@ -457,6 +457,9 @@ body:has(#whats) main { padding-bottom: 110px; }
   /* balão, banners e painel do aluno */
   .whats-flutuante { padding: 14px; }
   .whats-flutuante span { display: none; }
+  /* aluno logado: o balão fica acima da barra de abas inferior */
+  body:has(.nav a) .whats-flutuante { bottom: calc(76px + env(safe-area-inset-bottom)); }
+  body:has(#whats):has(.nav a) main { padding-bottom: calc(150px + env(safe-area-inset-bottom)); }
   #banners { top: 62px; }
   .painel-resumo { grid-template-columns: 1fr; padding: 20px 18px; }
   .painel-resumo .total { font-size: 32px; }

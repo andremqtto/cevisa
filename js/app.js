@@ -62,14 +62,19 @@ function desenharTopo(rotaAtual, { bloqueado = false } = {}) {
   if (estado.papel === 'gestor') iniciarNotificacoes(document.getElementById('notif-host'), { navegar });
 }
 
-// ------------------------------------------------------------------ balão do WhatsApp (só visitantes)
+// ------------------------------------------------------------------ balão do WhatsApp (visitantes e alunos)
 function atualizarWhatsApp() {
   let balao = document.getElementById('whats');
-  if (estado.papel) { balao?.remove(); return; }
-  if (balao) return;
-  const link = linkWhatsApp('Olá! Gostaria de informações sobre as aulas do Spa Médico Adventista Cevisa.');
+  const quem = estado.papel === 'aluno' ? 'aluno' : estado.papel ? null : 'visitante';
+  if (!quem) { balao?.remove(); return; }       // equipe não vê o balão
+  if (balao?.dataset.quem === quem) return;
+  balao?.remove();
+  const link = linkWhatsApp(quem === 'aluno'
+    ? 'Olá! Sou aluno(a) do Spa Médico Adventista Cevisa e gostaria de falar com a recepção.'
+    : 'Olá! Gostaria de informações sobre as aulas do Spa Médico Adventista Cevisa.');
   balao = document.createElement('a');
   balao.id = 'whats';
+  balao.dataset.quem = quem;
   balao.className = 'whats-flutuante';
   balao.href = link || '#';
   balao.target = '_blank';
