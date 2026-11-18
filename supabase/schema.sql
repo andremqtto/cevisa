@@ -149,6 +149,9 @@ alter table public.alunos add column if not exists participante_proprio    boole
 alter table public.alunos add column if not exists participante_nome       text;
 alter table public.alunos add column if not exists participante_nascimento date;
 
+-- Foto de perfil de quem faz as aulas (caminho no bucket privado "perfis": <id do aluno>/<arquivo>).
+alter table public.alunos add column if not exists foto text;
+
 -- Nome de quem faz as aulas (o dependente, ou o próprio responsável).
 create or replace function public._participante(a public.alunos)
 returns text language sql immutable as $$
@@ -822,7 +825,7 @@ declare r jsonb;
 begin
   if auth.uid() is null then raise exception 'Acesso negado.'; end if;
   select coalesce(jsonb_agg(jsonb_build_object(
-           'id', a.id, 'nome', a.nome, 'participante', public._participante(a), 'ativo', a.ativo, 'cadastro_completo', a.cadastro_completo,
+           'id', a.id, 'nome', a.nome, 'participante', public._participante(a), 'foto', a.foto, 'ativo', a.ativo, 'cadastro_completo', a.cadastro_completo,
            'matriculas', coalesce((
               select jsonb_agg(jsonb_build_object(
                        'id', m.id, 'aula_id', m.aula_id, 'status', m.status, 'plano', m.plano,
@@ -962,7 +965,7 @@ begin
                                      'responsavel', case when public._participante(a) <> a.nome then a.nome else a.responsavel end,
                                      'nascimento', case when public._participante(a) <> a.nome then a.participante_nascimento
                                                         else a.data_nascimento end,
-                                     'telefone', a.telefone, 'status', m.status, 'turma_id', m.turma_id,
+                                     'telefone', a.telefone, 'foto', a.foto, 'status', m.status, 'turma_id', m.turma_id,
                                      'desde', m.data_inicio)
                                    order by m.status, case when m.status = 'espera' then m.created_at end, public._participante(a))
                               from public.matriculas m join public.alunos a on a.id = m.aluno_id
@@ -1020,10 +1023,14 @@ grant execute on function public.aceitar_convite_admin()         to authenticate
 -- ---------------------------------------------------------------------
 
 -- Cadastros do aluno logado que ainda precisam ser completados.
+-- Fichas que o aluno ainda precisa completar: cadastro incompleto OU sem foto de perfil
+-- (so_foto = já tem os dados, falta só a foto — alunos antigos).
 create or replace function public.aluno_cadastro_pendente()
 returns jsonb language sql stable security definer set search_path = public as $$
-  select coalesce(jsonb_agg(jsonb_build_object('id', id, 'email', email) order by created_at), '[]'::jsonb)
-    from public.alunos where user_id = auth.uid() and not cadastro_completo;
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', a.id, 'email', a.email, 'nome', a.nome, 'participante', public._participante(a),
+           'so_foto', a.cadastro_completo) order by a.created_at), '[]'::jsonb)
+    from public.alunos a where a.user_id = auth.uid() and (not a.cadastro_completo or a.foto is null);
 $$;
 
 -- O responsável completa os dados no primeiro acesso, dizendo quem vai fazer as aulas
@@ -1040,10 +1047,13 @@ begin
   if nullif(trim(p_telefone), '') is null then raise exception 'Informe o telefone.'; end if;
   if p_nascimento is not null and p_nascimento > current_date then raise exception 'Data de nascimento inválida.'; end if;
   if not coalesce(p_proprio, true) and nullif(trim(p_participante), '') is null then
-    raise exception 'Informe o nome de quem vai fazer as aulas.';
+    raise exception 'Informe o nome do dependente.';
   end if;
   if p_participante_nasc is not null and p_participante_nasc > current_date then
     raise exception 'Data de nascimento de quem vai fazer as aulas inválida.';
+  end if;
+  if (select foto from public.alunos where id = p_aluno and user_id = auth.uid()) is null then
+    raise exception 'Envie a foto de perfil para concluir o cadastro.';
   end if;
   update public.alunos
      set nome = left(trim(p_nome), 120),
@@ -1188,6 +1198,53 @@ end $$;
 
 revoke all on function public.registrar_comprovante(uuid, text, text, text) from public, anon;
 grant execute on function public.registrar_comprovante(uuid, text, text, text) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- Fotos de perfil dos alunos (Storage PRIVADO "perfis"): pasta = id da ficha do aluno.
+-- O dono da ficha envia e vê a própria; gestores, admins e professores veem todas.
+-- ---------------------------------------------------------------------
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('perfis', 'perfis', false, 5242880, array['image/jpeg','image/png','image/webp'])
+on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit,
+                              allowed_mime_types = excluded.allowed_mime_types;
+
+-- A pasta (id da ficha) pertence ao usuário logado?
+create or replace function public._dono_ficha(p_pasta text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.alunos where id::text = p_pasta and user_id = auth.uid());
+$$;
+revoke all on function public._dono_ficha(text) from public, anon;
+grant execute on function public._dono_ficha(text) to authenticated;
+
+drop policy if exists perfis_leitura on storage.objects;
+create policy perfis_leitura on storage.objects for select to authenticated
+  using (bucket_id = 'perfis' and (public.is_gestor() or public.is_professor()
+                                   or public._dono_ficha((storage.foldername(name))[1])));
+drop policy if exists perfis_envio on storage.objects;
+create policy perfis_envio on storage.objects for insert to authenticated
+  with check (bucket_id = 'perfis' and (public.is_gestor() or public._dono_ficha((storage.foldername(name))[1])));
+drop policy if exists perfis_exclusao on storage.objects;
+create policy perfis_exclusao on storage.objects for delete to authenticated
+  using (bucket_id = 'perfis' and (public.is_gestor() or public._dono_ficha((storage.foldername(name))[1])));
+
+-- Grava a foto na ficha (dono da ficha ou gestor). Devolve o caminho da foto anterior (para apagar).
+create or replace function public.definir_foto(p_aluno uuid, p_arquivo text)
+returns text language plpgsql security definer set search_path = public as $$
+declare v_antiga text;
+begin
+  if not (public.is_gestor() or exists (select 1 from public.alunos where id = p_aluno and user_id = auth.uid())) then
+    raise exception 'Acesso negado.';
+  end if;
+  if split_part(p_arquivo, '/', 1) <> p_aluno::text
+     or not exists (select 1 from storage.objects where bucket_id = 'perfis' and name = p_arquivo) then
+    raise exception 'Foto não encontrada. Tente enviar de novo.';
+  end if;
+  select foto into v_antiga from public.alunos where id = p_aluno;
+  update public.alunos set foto = p_arquivo where id = p_aluno;
+  return nullif(v_antiga, p_arquivo);
+end $$;
+revoke all on function public.definir_foto(uuid, text) from public, anon;
+grant execute on function public.definir_foto(uuid, text) to authenticated;
 
 -- ---------------------------------------------------------------------
 -- Fotos das aulas (Storage): leitura pública, escrita só de gestores

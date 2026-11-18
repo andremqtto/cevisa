@@ -273,7 +273,7 @@ export function camposParticipante(a = {}) {
       <legend>Quem vai fazer as aulas?</legend>
       <label class="check"><input type="checkbox" name="part_proprio" ${proprio ? 'checked' : ''}> O próprio responsável (titular deste cadastro)</label>
       <div class="participante-campos grade2" ${proprio ? 'hidden' : ''}>
-        <label class="campo"><span>Nome de quem vai fazer as aulas *</span><input type="text" name="part_nome" maxlength="120" value="${esc(a.participante_nome)}"></label>
+        <label class="campo"><span>Nome do dependente *</span><input type="text" name="part_nome" maxlength="120" value="${esc(a.participante_nome)}"></label>
         <label class="campo"><span>Data de nascimento</span><input type="date" name="part_nasc" max="${hojeISO()}" value="${esc(a.participante_nascimento)}"></label>
       </div>
     </fieldset>`;
@@ -294,7 +294,7 @@ export function lerParticipante(form) {
   const proprio = form.querySelector('[name=part_proprio]').checked;
   const nome = form.querySelector('[name=part_nome]').value.trim();
   const nascimento = form.querySelector('[name=part_nasc]').value || null;
-  if (!proprio && !nome) throw new Error('Informe o nome de quem vai fazer as aulas, ou marque a caixa “O próprio responsável”.');
+  if (!proprio && !nome) throw new Error('Informe o nome do dependente, ou marque a caixa “O próprio responsável”.');
   if (nascimento && nascimento > hojeISO()) throw new Error('Data de nascimento de quem vai fazer as aulas inválida.');
   return { proprio, nome: proprio ? null : nome, nascimento: proprio ? null : nascimento };
 }

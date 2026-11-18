@@ -1,6 +1,7 @@
 // Painel do professor: alunos das aulas (modalidades) dele, por turma, + cadastro de alunos e QR Code.
 // O professor não vê valores, pagamentos nem as fichas completas.
 import { sb, ok } from './supabase.js';
+import { avatarHTML, ativarFotos } from './fotos.js';
 import { esc, fmtDate, carregando, vazio, erroBox, horariosHTML, linkWhatsAppPara, ICONE_WHATSAPP } from './ui.js';
 
 const idade = (nasc) => {
@@ -42,6 +43,7 @@ export async function renderProfessor(el, { navegar }) {
           <small>${c.cadastro_completo ? esc(c.email || '') : 'aguardando o 1º acesso do aluno'} · ${fmtDate(c.created_at.slice(0, 10))}</small></div></li>`).join('')}</ul>
     </section>` : ''}`;
 
+  ativarFotos(el);
   el.querySelector('#qr').onclick = async () => (await import('./alunos.js')).abrirQrCode();
   el.querySelector('#novo').onclick = async () => (await import('./alunos.js')).novoAluno(navegar, { professor: true, aoCriar: recarregar });
   el.querySelector('#busca')?.addEventListener('input', (e) => {
@@ -75,9 +77,11 @@ function cartaoAula(aula) {
 
 function linhaAluno(x) {
   const anos = idade(x.nascimento);
-  const zap = linkWhatsAppPara(x.telefone, `Olá, ${x.nome.split(' ')[0]}!`);
+  // a mensagem vai para o telefone do responsável
+  const zap = linkWhatsAppPara(x.telefone, `Olá, ${(x.responsavel || x.nome).split(' ')[0]}!`);
   return `
     <li class="prof-aluno" data-nome="${esc(x.nome.toLowerCase())}">
+      ${avatarHTML(x.foto, x.nome, 44)}
       <div><strong>${esc(x.nome)}</strong>
         <small>${[anos !== null ? `${anos} anos` : '', x.responsavel ? `resp.: ${esc(x.responsavel)}` : '', x.telefone ? esc(x.telefone) : ''].filter(Boolean).join(' · ') || '—'}</small></div>
       ${zap ? `<a class="icone-btn prof-zap" href="${esc(zap)}" target="_blank" rel="noopener" aria-label="WhatsApp de ${esc(x.nome)}">${ICONE_WHATSAPP}</a>` : ''}

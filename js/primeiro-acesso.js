@@ -2,20 +2,29 @@
 // Enquanto não concluir, o app não libera nenhuma outra tela.
 import { sb, ok } from './supabase.js';
 import { esc, hojeISO, comBotao, camposParticipante, ligarParticipante, lerParticipante } from './ui.js';
+import { campoFoto, ligarCampoFoto, salvarFoto } from './fotos.js';
+
+const AJUDA_FOTO = 'Foto de <strong>quem vai fazer as aulas</strong>, com o rosto bem visível. Ela aparece ao lado do nome para a recepção e o professor identificarem o aluno.';
 
 export async function renderPrimeiroAcesso(el, { trocarSenha, pendentes, aoConcluir }) {
   const aluno = pendentes[0] || null; // um cadastro por vez (normalmente só há um)
-  const titulo = aluno ? 'Complete seu cadastro' : 'Crie sua senha';
+  // so_foto: cadastro antigo que já tem os dados e só falta a foto de perfil
+  const soFoto = !!aluno?.so_foto;
+  const titulo = soFoto ? 'Falta só a foto de perfil' : aluno ? 'Complete seu cadastro' : 'Crie sua senha';
 
   el.innerHTML = `
     <div class="primeiro-acesso">
       <h1>${titulo}</h1>
-      <p class="sub">${aluno
+      <p class="sub">${soFoto
+        ? `Para continuar usando o app, envie uma foto de perfil de <strong>${esc(aluno.participante || aluno.nome)}</strong>. Leva só um instante.`
+        : aluno
         ? 'Bem-vindo(a) ao app do Spa Médico Adventista Cevisa! Antes de continuar, preencha seus dados' + (trocarSenha ? ' e crie sua própria senha.' : '.')
         : 'Você entrou com uma senha temporária. Crie sua própria senha para continuar.'}</p>
 
       <form id="f-primeiro" class="card" novalidate>
-        ${aluno ? `
+        ${soFoto ? `
+          ${campoFoto({ titulo: `Foto de ${aluno.participante || aluno.nome}`, ajuda: AJUDA_FOTO })}
+        ` : aluno ? `
           <h2>Seus dados (responsável)</h2>
           <p class="sub" style="margin:-4px 0 12px">Quem tem o acesso ao app e cuida dos pagamentos. Se as aulas forem para um filho ou dependente, informe logo abaixo.</p>
           <label class="campo"><span>Nome completo *</span><input type="text" name="nome" maxlength="120" autocomplete="name" required></label>
@@ -27,6 +36,7 @@ export async function renderPrimeiroAcesso(el, { trocarSenha, pendentes, aoConcl
           </div>
           <label class="campo"><span>Endereço</span><input type="text" name="endereco" maxlength="200" autocomplete="street-address"></label>
           ${camposParticipante()}
+          ${campoFoto({ titulo: 'Foto de perfil', ajuda: AJUDA_FOTO })}
         ` : ''}
         ${trocarSenha ? `
           <h2${aluno ? ' style="margin-top:8px"' : ''}>Sua nova senha</h2>
@@ -46,12 +56,14 @@ export async function renderPrimeiroAcesso(el, { trocarSenha, pendentes, aoConcl
     if (t) el.querySelector('#pa-erro').scrollIntoView({ block: 'center', behavior: 'smooth' });
   };
 
-  if (aluno) ligarParticipante(form);
+  if (aluno && !soFoto) ligarParticipante(form);
+  const fotoEscolhida = aluno ? ligarCampoFoto(form) : () => null;
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     let part = null;
-    if (aluno) {
+    if (aluno && !fotoEscolhida()) return erro('A foto de perfil é obrigatória. Toque em “Escolher foto”.');
+    if (aluno && !soFoto) {
       if (!form.nome.value.trim() || form.nome.value.trim().split(/\s+/).length < 2) return erro('Informe seu nome completo (nome e sobrenome).');
       if (form.telefone.value.replace(/\D/g, '').length < 10) return erro('Informe o telefone com DDD.');
       try { part = lerParticipante(form); } catch (err) { return erro(err.message); }
@@ -64,7 +76,8 @@ export async function renderPrimeiroAcesso(el, { trocarSenha, pendentes, aoConcl
     erro('');
     await comBotao(form.querySelector('[type=submit]'), async () => {
       try {
-        if (aluno) {
+        if (aluno) await salvarFoto(aluno.id, fotoEscolhida());
+        if (aluno && !soFoto) {
           ok(await sb.rpc('completar_cadastro', {
             p_aluno: aluno.id,
             p_nome: form.nome.value.trim(),

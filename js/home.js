@@ -1,5 +1,6 @@
 // Tela inicial: aulas, turmas e preços (pública). Gestores editam tudo aqui.
 import { sb, ok } from './supabase.js';
+import { avatarHTML, ativarFotos } from './fotos.js';
 import { esc, money, abrirModal, toast, confirmar, comBotao, carregando, vazio, erroBox, planoLabel, horariosHTML, nomeParticipante } from './ui.js';
 
 const FOTO_MAX = 5 * 1024 * 1024;
@@ -156,12 +157,12 @@ async function verAlunos(aula, turmas) {
   const m = abrirModal({ titulo: `Alunos — ${aula.nome}`, largura: 560, corpo: carregando() });
   try {
     const mats = ok(await sb.from('matriculas')
-      .select('id,status,plano,turma_id,created_at,alunos(id,nome,ativo,participante_proprio,participante_nome)')
+      .select('id,status,plano,turma_id,created_at,alunos(id,nome,ativo,participante_proprio,participante_nome,foto)')
       .eq('aula_id', aula.id).in('status', ['ativa', 'espera']).order('created_at'));
     const lista = (arr, fila) => arr.length
       ? `<ol style="margin:0;padding-left:22px">${arr.map((x) => `
-          <li style="margin:5px 0"><a href="#/alunos/${x.alunos.id}" data-ir>${esc(nomeParticipante(x.alunos))}</a>${nomeParticipante(x.alunos) !== x.alunos.nome ? ` <small class="sub">(resp.: ${esc(x.alunos.nome)})</small>` : ''}
-          <span class="badge">${planoLabel(x.plano)}</span>${x.alunos.ativo ? '' : ' <span class="badge cinza">Desativado</span>'}</li>`).join('')}</ol>`
+          <li style="margin:6px 0"><span class="com-avatar">${avatarHTML(x.alunos.foto, nomeParticipante(x.alunos), 34)}<span><a href="#/alunos/${x.alunos.id}" data-ir>${esc(nomeParticipante(x.alunos))}</a>${nomeParticipante(x.alunos) !== x.alunos.nome ? ` <small class="sub">(resp.: ${esc(x.alunos.nome)})</small>` : ''}
+          <span class="badge">${planoLabel(x.plano)}</span>${x.alunos.ativo ? '' : ' <span class="badge cinza">Desativado</span>'}</span></span></li>`).join('')}</ol>`
       : vazio(fila ? 'Ninguém na lista de espera.' : 'Nenhum aluno inscrito.');
     const grupo = (titulo, vagas, doGrupo) => {
       const ativos = doGrupo.filter((x) => x.status === 'ativa');
@@ -179,6 +180,7 @@ async function verAlunos(aula, turmas) {
         + (semTurma.length ? grupo('Sem turma definida', aula.vagas, semTurma)
           + '<p class="sub">Abra a ficha desses alunos e use “Trocar turma” para colocá-los numa turma.</p>' : '')
       : grupo(aula.nome, aula.vagas, mats);
+    ativarFotos(m.el);
     m.el.addEventListener('click', (e) => { if (e.target.closest('[data-ir]')) m.fechar(); });
   } catch (e) {
     m.el.innerHTML = erroBox(e);

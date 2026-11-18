@@ -1,6 +1,7 @@
 // Painel do aluno: aulas contratadas, horários, valores, vencimento e aviso de pagamento.
 import { sb, ok, chamarFuncao } from './supabase.js';
 import * as config from './config.js';
+import { avatarHTML, ativarFotos } from './fotos.js';
 import {
   esc, money, fmtDate, planoLabel, PLANOS, hojeISO, diasEntre, abrirModal, toast, comBotao, carregando, vazio, erroBox,
   horariosHTML,
@@ -58,9 +59,12 @@ export async function renderPainelAluno(el) {
 
   el.innerHTML = `
     <div class="pagina-topo">
-      <div>
+      <div class="com-avatar">
+        <div class="fotos-painel">${alunos.map((a) => avatarHTML(a.foto, quem(a), varios ? 48 : 60)).join('')}</div>
+        <div>
         <h1>Olá, ${esc(nome)}!</h1>
         <p class="sub">Este é o seu painel${alunos.some((a) => quem(a) !== a.nome) || varios ? ` · aulas de ${alunos.map((a) => esc(quem(a).split(' ')[0])).join(', ')}` : ' de aluno'}.</p>
+        </div>
       </div>
     </div>
 
@@ -95,6 +99,7 @@ export async function renderPainelAluno(el) {
       : `<div class="card">${vazio('Você ainda não está inscrito em nenhuma aula.')}<p style="text-align:center;margin:0 0 6px"><a class="btn" href="#/aulas">Ver aulas e me inscrever</a></p></div>`}`;
 
   el.querySelector('#ja-paguei').onclick = () => informarPagamento({ total, vencimento: vencimento || proximo, aPagar }, () => renderPainelAluno(el));
+  ativarFotos(el);
   el.querySelector('#comprovante').onclick = () => enviarComprovante(alunos);
   el.querySelector('#pagar-pix')?.addEventListener('click', () => pagarComPix({ total: aPagar.length ? total : null, vencimento }, () => enviarComprovante(alunos)));
 }
@@ -232,7 +237,7 @@ function cartaoAula(aluno, m, item, varios, hoje) {
         ${espera ? '<span class="badge alerta">Lista de espera</span>' : `<span class="badge">${planoLabel(m.plano)}</span>`}
       </header>
       ${m.turma ? `<p class="sub" style="margin:0">Turma: <strong>${esc(m.turma)}</strong></p>` : ''}
-      ${varios || quem(aluno) !== aluno.nome ? `<p class="sub" style="margin:0">Aluno(a): <strong>${esc(quem(aluno))}</strong></p>` : ''}
+      ${varios || quem(aluno) !== aluno.nome ? `<p class="sub com-avatar" style="margin:0">${avatarHTML(aluno.foto, quem(aluno), 28)}<span>Aluno(a): <strong>${esc(quem(aluno))}</strong></span></p>` : ''}
       ${horariosHTML(m.horarios) || '<p class="sub" style="margin:0">Horários a confirmar com a recepção.</p>'}
       <dl class="linhas">
         ${espera ? '<div><dt>Situação</dt><dd>Aguardando vaga</dd></div>' : `

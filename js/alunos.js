@@ -6,6 +6,7 @@ import {
   nomeParticipante, camposParticipante, ligarParticipante, lerParticipante,
 } from './ui.js';
 import { registrarPagamento } from './financeiro.js';
+import { avatarHTML, ativarFotos, salvarFoto } from './fotos.js';
 import * as config from './config.js';
 
 const MESES_PLANO = { mensal: 1, semestral: 6, anual: 12 };
@@ -42,7 +43,7 @@ export async function renderAlunos(el, { navegar }) {
   let alunos;
   try {
     alunos = ok(await sb.from('alunos')
-      .select('id,nome,email,telefone,ativo,cadastro_completo,created_at,participante_proprio,participante_nome, matriculas(id,status,plano,data_fim,aulas(nome))')
+      .select('id,nome,email,telefone,ativo,cadastro_completo,created_at,participante_proprio,participante_nome,foto, matriculas(id,status,plano,data_fim,aulas(nome))')
       .order('nome'));
   } catch (e) { el.innerHTML = erroBox(e); return; }
 
@@ -90,12 +91,13 @@ export async function renderAlunos(el, { navegar }) {
         const s = situacao(a.matriculas);
         const vivas = a.matriculas.filter((m) => m.status !== 'encerrada');
         return `<tr class="clicavel" data-id="${a.id}" tabindex="0">
-          <td><strong>${esc(nomeParticipante(a))}</strong>${nomeParticipante(a) !== a.nome ? `<br><small class="sub">resp.: ${esc(a.nome)}</small>` : ''}${a.ativo ? '' : ' <span class="badge cinza">Desativado</span>'}${a.cadastro_completo === false ? ' <span class="badge alerta">Aguardando 1º acesso</span>' : ''}<br><small class="sub">${esc(a.telefone || '')}</small></td>
+          <td><div class="com-avatar">${avatarHTML(a.foto, nomeParticipante(a), 40)}<div><strong>${esc(nomeParticipante(a))}</strong>${nomeParticipante(a) !== a.nome ? `<br><small class="sub">resp.: ${esc(a.nome)}</small>` : ''}${a.ativo ? '' : ' <span class="badge cinza">Desativado</span>'}${a.cadastro_completo === false ? ' <span class="badge alerta">Aguardando 1º acesso</span>' : ''}<br><small class="sub">${esc(a.telefone || '')}</small></div></div></td>
           <td>${vivas.length ? vivas.map((m) => `${esc(m.aulas?.nome)}${m.status === 'espera' ? ' <span class="badge alerta">espera</span>' : ''}`).join('<br>') : '—'}</td>
           <td>${vivas.length ? vivas.map((m) => planoLabel(m.plano)).join('<br>') : '—'}</td>
           <td><span class="badge ${s.cls}">${s.txt}</span></td>
           <td>${fmtDate((a.created_at || '').slice(0, 10))}</td></tr>`;
       }).join('')}</tbody></table></div>`;
+    ativarFotos(lista);
   }
 
   const ir = (e) => {
@@ -372,11 +374,17 @@ export async function renderFicha(el, id, { navegar }) {
   el.innerHTML = `
     <a class="voltar" href="#/alunos">← Alunos</a>
     <div class="pagina-topo">
-      <div>
+      <div class="ficha-cabeca">
+        <div class="ficha-foto">
+          ${avatarHTML(aluno.foto, nomeParticipante(aluno), 84)}
+          <label class="link-foto no-print"><input type="file" accept="image/*" id="trocar-foto" hidden>${aluno.foto ? 'Trocar foto' : 'Adicionar foto'}</label>
+        </div>
+        <div>
         <h1>${esc(aluno.nome)} <span class="badge ${aluno.ativo ? 'ok' : 'cinza'}" style="vertical-align:middle">${aluno.ativo ? 'Ativo' : 'Desativado'}</span></h1>
         ${nomeParticipante(aluno) !== aluno.nome ? `<p class="participante-linha">Faz as aulas: <strong>${esc(nomeParticipante(aluno))}</strong> · ${esc(aluno.nome)} é o(a) responsável</p>` : ''}
         <p class="sub"><span class="badge ${s.cls}">${s.txt}</span> · cliente desde ${fmtDate((aluno.created_at || '').slice(0, 10))} · total pago ${money(totalPago)}
           · ${aluno.user_id && aluno.cadastro_completo === false ? '<span class="badge alerta">Aguardando 1º acesso do aluno</span>' : aluno.user_id ? '<span class="badge ok">Acesso ao app ativo</span>' : aluno.email ? '<span class="badge cinza">Ainda não acessou o app</span>' : '<span class="badge alerta">Sem e-mail: cadastre um para liberar o app</span>'}</p>
+        </div>
       </div>
       <div class="acoes-linha no-print">
         <a class="btn whats" id="mensagem" target="_blank" rel="noopener"
@@ -464,6 +472,21 @@ export async function renderFicha(el, id, { navegar }) {
   });
   el.querySelector('#excluir').onclick =() => excluirAluno(aluno, mats, () => navegar('#/alunos'));
   el.querySelector('#editar').onclick = () => editarAluno(aluno, recarregar);
+  ativarFotos(el);
+  el.querySelector('#trocar-foto').addEventListener('change', async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const rotulo = e.target.closest('label');
+    rotulo.classList.add('enviando');
+    try {
+      await salvarFoto(aluno.id, f);
+      toast('Foto atualizada.');
+      recarregar();
+    } catch (err) {
+      toast(err.message, 'erro');
+      rotulo.classList.remove('enviando');
+    }
+  });
   el.querySelector('#nova-senha')?.addEventListener('click', async (e) => {
     if (!(await confirmar(`Gerar uma nova senha temporária para ${aluno.nome}? A senha atual dele deixa de funcionar.`, { titulo: 'Nova senha', confirmarTexto: 'Gerar nova senha' }))) return;
     await comBotao(e.currentTarget, async () => {
