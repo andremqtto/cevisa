@@ -5,6 +5,7 @@ import {
   confirmar, comBotao, carregando, vazio, erroBox,
 } from './ui.js';
 import { registrarPagamento } from './financeiro.js';
+import * as config from './config.js';
 
 const MESES_PLANO = { mensal: 1, semestral: 6, anual: 12 };
 
@@ -50,7 +51,10 @@ export async function renderAlunos(el, { navegar }) {
   el.innerHTML = `
     <div class="pagina-topo">
       <div><h1>Alunos</h1><p class="sub" id="contagem"></p></div>
-      <button class="btn" type="button" id="novo">＋ Novo aluno</button>
+      <div class="acoes-linha">
+        <button class="btn sec" type="button" id="qr">QR Code do app</button>
+        <button class="btn" type="button" id="novo">＋ Novo aluno</button>
+      </div>
     </div>
     <div class="filtros">
       <input type="text" id="busca" placeholder="Buscar por nome ou telefone…" aria-label="Buscar aluno">
@@ -102,7 +106,71 @@ export async function renderAlunos(el, { navegar }) {
   el.querySelector('#busca').addEventListener('input', (e) => { busca = e.target.value; desenhar(); });
   el.querySelector('#filtro').addEventListener('change', (e) => { filtro = e.target.value; desenhar(); });
   el.querySelector('#novo').addEventListener('click', () => editarAluno(null, (novo) => navegar(`#/alunos/${novo.id}`)));
+  el.querySelector('#qr').addEventListener('click', abrirQrCode);
   desenhar();
+}
+
+// ================================================================== QR CODE DO APP
+async function abrirQrCode() {
+  const url = config.APP_URL || `${location.origin}${location.pathname}`;
+  const m = abrirModal({ titulo: 'QR Code do app', largura: 420, corpo: carregando('Gerando QR Code…') });
+  let qr;
+  try {
+    const { default: qrcode } = await import('https://esm.sh/qrcode-generator@1.4.4');
+    qr = qrcode(0, 'M');
+    qr.addData(url);
+    qr.make();
+  } catch {
+    m.el.innerHTML = erroBox('Não foi possível gerar o QR Code. Verifique a internet e tente de novo.');
+    return;
+  }
+
+  // Desenha em canvas (nítido em qualquer tela e pode ser baixado como PNG).
+  const n = qr.getModuleCount();
+  const margem = 4;
+  const celula = 10;
+  const lado = (n + margem * 2) * celula;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = lado;
+  canvas.className = 'qr-canvas';
+  canvas.setAttribute('role', 'img');
+  canvas.setAttribute('aria-label', `QR Code para ${url}`);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, lado, lado);
+  ctx.fillStyle = '#0d2438';
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (qr.isDark(r, c)) ctx.fillRect((c + margem) * celula, (r + margem) * celula, celula, celula);
+    }
+  }
+
+  const podeCompartilhar = typeof navigator.share === 'function';
+  m.el.innerHTML = `
+    <p class="sub" style="text-align:center;margin:0 0 12px">Peça para o aluno apontar a câmera do celular para o código.</p>
+    <div class="qr-box"></div>
+    <p class="qr-url"><a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a></p>
+    <div class="acoes qr-acoes">
+      <button class="btn sec" type="button" data-copiar>Copiar link</button>
+      <button class="btn sec" type="button" data-baixar>Baixar imagem</button>
+      ${podeCompartilhar ? '<button class="btn" type="button" data-compartilhar>Compartilhar</button>' : ''}
+    </div>`;
+  m.el.querySelector('.qr-box').appendChild(canvas);
+
+  m.el.querySelector('[data-copiar]').onclick = async () => {
+    try { await navigator.clipboard.writeText(url); toast('Link copiado.'); } catch { toast('Não foi possível copiar. Copie o link acima.', 'erro'); }
+  };
+  m.el.querySelector('[data-baixar]').onclick = () => {
+    const a = document.createElement('a');
+    a.href = canvas.toDataURL('image/png');
+    a.download = 'qrcode-app-cevisa.png';
+    a.click();
+  };
+  m.el.querySelector('[data-compartilhar]')?.addEventListener('click', async () => {
+    try {
+      await navigator.share({ title: 'App Cevisa', text: 'Acesse o app do Spa Médico Adventista Cevisa:', url });
+    } catch { /* usuário cancelou */ }
+  });
 }
 
 // ================================================================== CADASTRO / EDIÇÃO
