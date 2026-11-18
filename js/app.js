@@ -4,8 +4,9 @@ import { esc, abrirModal, fecharTodosModais, toast, comBotao, carregando, erroBo
 import { renderHome } from './home.js';
 import { iniciarNotificacoes, pararNotificacoes } from './notificacoes.js';
 
-// papel: 'gestor' | 'aluno' | null (visitante)
-const estado = { papel: null, email: null };
+// papel: 'gestor' (gestor principal ou admin) | 'aluno' | null (visitante)
+// principal: true só para o gestor principal (pode gerenciar admins)
+const estado = { papel: null, email: null, principal: false };
 let renderizadoComo; // evita redesenhar à toa quando o Supabase reemite SIGNED_IN
 const raiz = document.getElementById('app');
 
@@ -15,13 +16,14 @@ const ROTAS = {
     { rota: 'alunos', rotulo: 'Alunos' },
     { rota: 'cobrancas', rotulo: 'Cobranças' },
     { rota: 'relatorios', rotulo: 'Relatórios' },
+    { rota: 'equipe', rotulo: 'Admins', soPrincipal: true },
   ],
   aluno: [
     { rota: '', rotulo: 'Meu painel' },
     { rota: 'aulas', rotulo: 'Aulas' },
   ],
 };
-const ROTAS_GESTOR = ['alunos', 'cobrancas', 'relatorios'];
+const ROTAS_GESTOR = ['alunos', 'cobrancas', 'relatorios', 'equipe'];
 
 function navegar(hash) {
   if (location.hash === hash) rotear();
@@ -31,6 +33,7 @@ function navegar(hash) {
 // ------------------------------------------------------------------ cabeçalho
 function desenharTopo(rotaAtual) {
   const nav = (ROTAS[estado.papel] || [])
+    .filter((r) => !r.soPrincipal || estado.principal)
     .map((r) => `<a href="#/${r.rota}" class="${r.rota === rotaAtual ? 'atual' : ''}">${r.rotulo}</a>`).join('');
   let acoes = '<button class="btn" id="btn-entrar" type="button">Entrar</button>';
   if (estado.papel === 'gestor') acoes = '<span id="notif-host"></span><button class="btn sec pequeno" id="btn-sair" type="button">Sair</button>';
@@ -81,7 +84,7 @@ export function abrirLogin(modo = 'entrar') {
     m.el.innerHTML = `
       <img class="login-logo" src="assets/logo.png" alt="Spa Médico Adventista Cevisa">
       <p class="sub" style="text-align:center;margin:0 0 16px">${primeiro
-        ? 'Crie sua senha usando o mesmo e-mail que você informou na recepção.'
+        ? 'Alunos e admins: crie sua senha usando o e-mail que foi cadastrado para você.'
         : 'Acesso para alunos e gestores.'}</p>
       ${aviso}
       <form id="f-login" novalidate>
@@ -163,10 +166,27 @@ export function abrirLogin(modo = 'entrar') {
 /** Descobre se o usuário logado é gestor, aluno ou nenhum dos dois. */
 async function verificarPapel() {
   const { data: { session } } = await sb.auth.getSession();
+  estado.principal = false;
   if (!session) { estado.papel = null; estado.email = null; return null; }
   estado.email = session.user.email;
-  const { data: g, error } = await sb.from('gestores').select('user_id').eq('user_id', session.user.id).maybeSingle();
-  if (!error && g) return (estado.papel = 'gestor');
+  const buscarEquipe = async () => {
+    const { data, error } = await sb.from('gestores').select('user_id,papel').eq('user_id', session.user.id).maybeSingle();
+    if (!error) return data;
+    // banco ainda sem a coluna "papel" (schema.sql antigo): todo gestor é principal
+    const antigo = await sb.from('gestores').select('user_id').eq('user_id', session.user.id).maybeSingle();
+    return antigo.error ? null : antigo.data;
+  };
+  let g = await buscarEquipe();
+  if (!g) {
+    // admin convidado entrando pela primeira vez
+    const { data: aceitou, error: e1 } = await sb.rpc('aceitar_convite_admin');
+    if (e1) console.warn('aceitar_convite_admin:', e1.message);
+    if (aceitou) g = await buscarEquipe();
+  }
+  if (g) {
+    estado.principal = (g.papel ?? 'gestor') === 'gestor';
+    return (estado.papel = 'gestor');
+  }
   const { data: qtd, error: e2 } = await sb.rpc('vincular_aluno');
   if (e2) console.warn('vincular_aluno:', e2.message);
   return (estado.papel = !e2 && qtd > 0 ? 'aluno' : null);
@@ -197,7 +217,9 @@ async function rotear() {
     return;
   }
 
-  const permitidas = estado.papel === 'gestor' ? ['', ...ROTAS_GESTOR] : ['', 'aulas'];
+  const permitidas = estado.papel === 'gestor'
+    ? ['', ...ROTAS_GESTOR.filter((r) => r !== 'equipe' || estado.principal)]
+    : ['', 'aulas'];
   if (!permitidas.includes(rota)) { history.replaceState(null, '', '#/'); rota = ''; }
 
   desenharTopo(rota);
@@ -223,6 +245,10 @@ async function rotear() {
       const { renderRelatorios } = await import('./relatorios.js');
       if (minha !== versaoRota) return;
       await renderRelatorios(raiz, { navegar });
+    } else if (rota === 'equipe') {
+      const { renderEquipe } = await import('./equipe.js');
+      if (minha !== versaoRota) return;
+      await renderEquipe(raiz);
     }
   } catch (e) {
     raiz.innerHTML = erroBox(e);

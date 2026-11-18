@@ -122,6 +122,21 @@ alter table public.alunos add column if not exists user_id uuid references auth.
 create index if not exists alunos_user_idx  on public.alunos (user_id);
 create index if not exists alunos_email_idx on public.alunos (lower(email));
 
+-- Equipe: 'gestor' (principal) e 'admin' (mesmas permissões, mas não gerencia admins).
+-- Quem já estava em gestores continua como gestor principal.
+alter table public.gestores add column if not exists papel text not null default 'gestor';
+alter table public.gestores add column if not exists email text;
+alter table public.gestores drop constraint if exists gestores_papel_check;
+alter table public.gestores add constraint gestores_papel_check check (papel in ('gestor','admin'));
+
+-- Admins convidados que ainda não criaram a senha (entram pelo "Primeiro acesso").
+create table if not exists public.convites_admin (
+  email      text primary key,           -- sempre em minúsculas
+  nome       text,
+  criado_por uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
 -- Novo tipo de notificação: aluno avisou que pagou.
 alter table public.notificacoes drop constraint if exists notificacoes_tipo_check;
 alter table public.notificacoes add constraint notificacoes_tipo_check
@@ -160,6 +175,19 @@ as $$
   select exists (select 1 from public.gestores where user_id = auth.uid());
 $$;
 
+-- Só o gestor principal (não os admins) pode gerenciar admins.
+create or replace function public.is_gestor_principal()
+returns boolean
+language sql stable security definer
+set search_path = public
+as $$
+  select exists (select 1 from public.gestores where user_id = auth.uid() and papel = 'gestor');
+$$;
+
+alter table public.convites_admin enable row level security;
+drop policy if exists convites_principal on public.convites_admin;
+create policy convites_principal on public.convites_admin for select to authenticated using (public.is_gestor_principal());
+
 alter table public.gestores     enable row level security;
 alter table public.aulas        enable row level security;
 alter table public.alunos       enable row level security;
@@ -169,7 +197,7 @@ alter table public.trancamentos enable row level security;
 alter table public.notificacoes enable row level security;
 
 drop policy if exists gestores_self   on public.gestores;
-create policy gestores_self   on public.gestores     for select to authenticated using (user_id = auth.uid());
+create policy gestores_self   on public.gestores     for select to authenticated using (user_id = auth.uid() or public.is_gestor_principal());
 drop policy if exists aulas_gestor    on public.aulas;
 create policy aulas_gestor    on public.aulas        for all to authenticated using (public.is_gestor()) with check (public.is_gestor());
 drop policy if exists alunos_gestor   on public.alunos;
@@ -563,6 +591,74 @@ begin
   if v_qtd = 0 then raise exception 'Você não tem mensalidades ativas para informar.'; end if;
   return v_qtd;
 end $$;
+
+-- ---------------------------------------------------------------------
+-- Admins (somente o gestor principal adiciona/remove)
+-- ---------------------------------------------------------------------
+
+-- Adiciona um admin pelo e-mail. Se a pessoa ainda não tem conta, fica como convite
+-- e vira admin quando criar a senha em "Primeiro acesso" e confirmar o e-mail.
+-- Retorna 'ativo' ou 'convidado'.
+create or replace function public.adicionar_admin(p_email text, p_nome text default null)
+returns text language plpgsql security definer set search_path = public as $$
+declare v_email text := lower(trim(p_email)); v_user uuid; v_conf timestamptz;
+begin
+  if not public.is_gestor_principal() then raise exception 'Apenas o gestor principal pode adicionar admins.'; end if;
+  if v_email is null or v_email !~ '^\S+@\S+\.\S+$' then raise exception 'E-mail inválido.'; end if;
+  select id, email_confirmed_at into v_user, v_conf from auth.users where lower(email) = v_email;
+  if v_user is not null and exists (select 1 from public.gestores where user_id = v_user) then
+    raise exception 'Este e-mail já faz parte da equipe.';
+  end if;
+  if v_user is not null and v_conf is not null then
+    insert into public.gestores (user_id, nome, papel, email) values (v_user, nullif(trim(p_nome), ''), 'admin', v_email);
+    delete from public.convites_admin where email = v_email;
+    return 'ativo';
+  end if;
+  insert into public.convites_admin (email, nome, criado_por) values (v_email, nullif(trim(p_nome), ''), auth.uid())
+  on conflict (email) do update set nome = excluded.nome;
+  return 'convidado';
+end $$;
+
+-- Remove um admin (nunca o gestor principal).
+create or replace function public.remover_admin(p_user uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_gestor_principal() then raise exception 'Apenas o gestor principal pode remover admins.'; end if;
+  delete from public.gestores where user_id = p_user and papel = 'admin';
+  if not found then raise exception 'Admin não encontrado.'; end if;
+end $$;
+
+create or replace function public.cancelar_convite_admin(p_email text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_gestor_principal() then raise exception 'Acesso negado.'; end if;
+  delete from public.convites_admin where email = lower(trim(p_email));
+end $$;
+
+-- Chamado no login: se houver convite para o e-mail (confirmado), vira admin.
+create or replace function public.aceitar_convite_admin()
+returns boolean language plpgsql security definer set search_path = public as $$
+declare v_email text; v_conf timestamptz; c public.convites_admin;
+begin
+  if auth.uid() is null then return false; end if;
+  if exists (select 1 from public.gestores where user_id = auth.uid()) then return true; end if;
+  select lower(email), email_confirmed_at into v_email, v_conf from auth.users where id = auth.uid();
+  if v_email is null or v_conf is null then return false; end if;
+  select * into c from public.convites_admin where email = v_email;
+  if not found then return false; end if;
+  insert into public.gestores (user_id, nome, papel, email) values (auth.uid(), c.nome, 'admin', v_email);
+  delete from public.convites_admin where email = v_email;
+  return true;
+end $$;
+
+revoke all on function public.adicionar_admin(text, text)        from public, anon;
+revoke all on function public.remover_admin(uuid)                from public, anon;
+revoke all on function public.cancelar_convite_admin(text)       from public, anon;
+revoke all on function public.aceitar_convite_admin()            from public, anon;
+grant execute on function public.adicionar_admin(text, text)     to authenticated;
+grant execute on function public.remover_admin(uuid)             to authenticated;
+grant execute on function public.cancelar_convite_admin(text)    to authenticated;
+grant execute on function public.aceitar_convite_admin()         to authenticated;
 
 revoke all on function public.vincular_aluno()                  from public, anon;
 revoke all on function public.painel_aluno()                    from public, anon;

@@ -48,6 +48,10 @@ Para publicar, envie a pasta inteira para qualquer hospedagem estática (Netlify
 
 **Tela inicial (pública):** aulas com descrição, foto e preços mensal/semestral/anual. Visitantes **não** veem número de vagas. O botão **Entrar** abre o login em uma janela flutuante. Logado como gestor, os cartões ganham **Editar**, **Ver turma** e **Nova aula** (nome, descrição, preços, vagas, foto, ordem, ocultar/exibir).
 
+**Gestor e admins:** quem foi cadastrado como gestor no passo 2 é o **gestor principal**. Só ele vê a aba **Admins**, onde adiciona ou remove admins pelo e-mail. Admins têm as mesmas permissões do gestor, mas não podem adicionar nem remover admins. Se o admin ainda não tem senha, ele cria em **Entrar → Primeiro acesso** com o e-mail cadastrado e passa a ter acesso depois de confirmar o e-mail.
+
+**Atalho no celular:** ao adicionar o site à tela inicial, o nome sugerido é **CEVISA** e o ícone é o símbolo da logo (`assets/icon-*.png`, `assets/apple-touch-icon.png` e `manifest.webmanifest`).
+
 **Horários:** cada aula tem um campo de horários (um por linha), editado pelo gestor em **Editar**. Aparecem na tela inicial e no painel do aluno.
 
 **Painel do aluno:** depois do login, o aluno vê as aulas contratadas com horários, o valor de cada plano, o **total a pagar** (mensalidades que vencem nos próximos 30 dias ou já vencidas) e a data de vencimento. Tem os botões **Falar com o gestor** (WhatsApp) e **Já paguei**: este avisa o gestor, que recebe na hora um **banner verde** no app; tocando nele, abre a ficha do aluno. O aviso some quando o gestor registra o pagamento. O aluno não tem nenhum privilégio de gestor: só enxerga os próprios dados.
