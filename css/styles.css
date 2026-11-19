@@ -620,3 +620,9 @@ body:has(#whats) main { padding-bottom: 110px; }
   .spinner { animation-duration: 2s; }
   .toast { transition: none; }
 }
+
+/* Link de cadastro (Novo aluno) */
+.link-cadastro { border: 1.5px dashed var(--borda); border-radius: 10px; padding: 10px 12px; margin: 0 0 12px; font-weight: 600; color: var(--azul); word-break: break-all; text-align: center; }
+.link-cadastro-acoes { display: grid; gap: 8px; margin: 0 0 14px; }
+.link-cadastro-acoes .btn { width: 100%; justify-content: center; }
+.campo-robo { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }

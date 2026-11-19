@@ -110,14 +110,17 @@ export async function renderAlunos(el, { navegar }) {
   el.querySelector('#busca').addEventListener('input', (e) => { busca = e.target.value; desenhar(); });
   el.querySelector('#filtro').addEventListener('change', (e) => { filtro = e.target.value; desenhar(); });
   el.querySelector('#novo').addEventListener('click', () => novoAluno(navegar));
-  el.querySelector('#qr').addEventListener('click', abrirQrCode);
+  el.querySelector('#qr').addEventListener('click', () => abrirQrCode());
   desenhar();
 }
 
 // ================================================================== QR CODE DO APP
-export async function abrirQrCode() {
-  const url = config.APP_URL || `${location.origin}${location.pathname}`;
-  const m = abrirModal({ titulo: 'QR Code do app', largura: 420, corpo: carregando('Gerando QR Code…') });
+const urlApp = () => (config.APP_URL || `${location.origin}${location.pathname}`).replace(/\/$/, '');
+/** Link que a equipe envia para a pessoa criar o próprio cadastro. */
+export const linkCadastro = () => `${urlApp()}/#/cadastro`;
+
+export async function abrirQrCode({ url = urlApp(), titulo = 'QR Code do app', texto = 'Peça para o aluno apontar a câmera do celular para o código.', arquivo = 'qrcode-app-cevisa.png', compartilhar = 'Acesse o app do Spa Médico Adventista Cevisa:' } = {}) {
+  const m = abrirModal({ titulo, largura: 420, corpo: carregando('Gerando QR Code…') });
   let qr;
   try {
     const { default: qrcode } = await import('https://esm.sh/qrcode-generator@1.4.4');
@@ -151,7 +154,7 @@ export async function abrirQrCode() {
 
   const podeCompartilhar = typeof navigator.share === 'function';
   m.el.innerHTML = `
-    <p class="sub" style="text-align:center;margin:0 0 12px">Peça para o aluno apontar a câmera do celular para o código.</p>
+    <p class="sub" style="text-align:center;margin:0 0 12px">${esc(texto)}</p>
     <div class="qr-box"></div>
     <p class="qr-url"><a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a></p>
     <div class="acoes qr-acoes">
@@ -167,59 +170,51 @@ export async function abrirQrCode() {
   m.el.querySelector('[data-baixar]').onclick = () => {
     const a = document.createElement('a');
     a.href = canvas.toDataURL('image/png');
-    a.download = 'qrcode-app-cevisa.png';
+    a.download = arquivo;
     a.click();
   };
   m.el.querySelector('[data-compartilhar]')?.addEventListener('click', async () => {
     try {
-      await navigator.share({ title: 'App Cevisa', text: 'Acesse o app do Spa Médico Adventista Cevisa:', url });
+      await navigator.share({ title: 'App Cevisa', text: compartilhar, url });
     } catch { /* usuário cancelou */ }
   });
 }
 
-// ================================================================== NOVO ALUNO (só e-mail + senha temporária)
-// professor: true → sem cadastro manual e sem abrir a ficha (o professor não acessa fichas); chama aoCriar no fim.
-export function novoAluno(navegar, { professor = false, aoCriar } = {}) {
+// ================================================================== NOVO ALUNO (link de cadastro)
+// A equipe envia o link; a própria pessoa cria e-mail e senha e preenche o cadastro (dados, vínculo, foto e termo).
+// professor: true → sem a opção de cadastro manual (o professor não acessa fichas).
+const MSG_CADASTRO = 'Olá! Para fazer seu cadastro no app do Spa Médico Adventista Cevisa, acesse o link abaixo, crie seu e-mail e senha e preencha seus dados:';
+
+export function novoAluno(navegar, { professor = false } = {}) {
+  const link = linkCadastro();
+  const podeCompartilhar = typeof navigator.share === 'function';
   const m = abrirModal({
     titulo: 'Novo aluno',
-    largura: 460,
+    largura: 480,
     corpo: `
-      <form id="f-novo" novalidate>
-        <label class="campo"><span>E-mail do aluno *</span><input type="email" name="email" maxlength="120" inputmode="email" autocapitalize="none" autocomplete="off" required>
-          <small>Para crianças e bebês, use o e-mail do responsável.</small></label>
-        <div class="aviso info">O app vai gerar uma <strong>senha temporária</strong> para você passar ao aluno. No primeiro acesso ele cria a própria senha e completa o cadastro.</div>
-        <div id="n-erro"></div>
-        <div class="acoes">
-          <button class="btn sec" type="button" data-cancelar>Cancelar</button>
-          <button class="btn" type="submit">Criar acesso</button>
-        </div>
-        ${professor ? '<p class="login-troca">Depois, a recepção faz a inscrição do aluno na aula e na turma.</p>'
-          : '<p class="login-troca">Aluno sem e-mail? <button type="button" class="link" data-manual>Cadastrar sem acesso ao app</button></p>'}
-      </form>`,
+      <p style="margin-top:0">Envie este link para a pessoa. Ela mesma cria o <strong>e-mail e a senha</strong> e preenche o cadastro: dados, vínculo (externo, funcionário ou prestador), quem vai fazer as aulas, foto e termo.</p>
+      <div class="link-cadastro"><span>${esc(link)}</span></div>
+      <div class="link-cadastro-acoes">
+        <a class="btn whats" href="https://wa.me/?text=${encodeURIComponent(`${MSG_CADASTRO}\n${link}`)}" target="_blank" rel="noopener">${ICONE_WHATSAPP}Enviar pelo WhatsApp</a>
+        <button class="btn sec" type="button" data-copiar>Copiar link</button>
+        ${podeCompartilhar ? '<button class="btn sec" type="button" data-compartilhar>Compartilhar</button>' : ''}
+        <button class="btn sec" type="button" data-qr>Mostrar QR Code</button>
+      </div>
+      <div class="aviso info">Quando a pessoa terminar, o cadastro aparece na lista de alunos${professor ? '' : ' (e você pode inscrevê-la nas aulas pela ficha)'}. Ela também pode pedir a inscrição pelo app.</div>
+      ${professor ? '<p class="login-troca">Depois, a recepção faz a inscrição do aluno na aula e na turma.</p>'
+        : '<p class="login-troca">Aluno sem celular ou sem e-mail? <button type="button" class="link" data-manual>Cadastrar manualmente (sem acesso ao app)</button></p>'}`,
   });
-  const form = m.el.querySelector('#f-novo');
-  const erro = (t) => { m.el.querySelector('#n-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
-  m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
+  m.el.querySelector('[data-copiar]').onclick = async () => {
+    try { await navigator.clipboard.writeText(link); toast('Link copiado.'); } catch { toast('Não foi possível copiar. Copie o link acima.', 'erro'); }
+  };
+  m.el.querySelector('[data-compartilhar]')?.addEventListener('click', async () => {
+    try { await navigator.share({ title: 'Cadastro no app Cevisa', text: MSG_CADASTRO, url: link }); } catch { /* cancelou */ }
+  });
+  m.el.querySelector('[data-qr]').onclick = () => {
+    m.fechar();
+    abrirQrCode({ url: link, titulo: 'QR Code do cadastro', texto: 'A pessoa aponta a câmera do celular para o código e faz o cadastro.', arquivo: 'qrcode-cadastro-cevisa.png', compartilhar: MSG_CADASTRO });
+  };
   m.el.querySelector('[data-manual]')?.addEventListener('click', () => { m.fechar(); editarAluno(null, (novo) => navegar(`#/alunos/${novo.id}`)); });
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const email = form.email.value.trim().toLowerCase();
-    if (!/^\S+@\S+\.\S+$/.test(email)) return erro('Informe um e-mail válido.');
-    erro('');
-    await comBotao(form.querySelector('[type=submit]'), async () => {
-      try {
-        const r = await chamarCriarUsuario({ acao: 'criar_aluno', email });
-        m.fechar();
-        if (professor) {
-          aoCriar?.();
-          mostrarCredenciais({ email: r.email, senha: r.senha });
-          return;
-        }
-        navegar(`#/alunos/${r.aluno_id}`);
-        setTimeout(() => mostrarCredenciais({ email: r.email, senha: r.senha }), 400);
-      } catch (err) { erro(err.message); }
-    });
-  });
 }
 
 // ================================================================== EXCLUIR (permanente)

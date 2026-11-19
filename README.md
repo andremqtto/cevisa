@@ -17,7 +17,7 @@ App de controle de alunos e financeiro da academia. Banco de dados no **Supabase
    select id, 'Nome do gestor' from auth.users where email = 'gestor@exemplo.com';
    ```
    Para dar acesso a outros gestores, repita os dois passos.
-3. Em **Authentication → Sign In / Providers → Email**, **desligue** **Allow new users to sign up**. Ninguém cria conta sozinho: as contas de alunos e admins são criadas pelo app, com senha temporária.
+3. Em **Authentication → Sign In / Providers → Email**, **desligue** **Allow new users to sign up**. As contas são criadas pelas funções abaixo: o aluno se cadastra pelo link (função `cadastro-aluno`) e a equipe/admins pela função `criar-usuario`.
 4. Em **Authentication → URL Configuration**, deixe **Site URL** = endereço publicado (ex.: `https://cevisa.vercel.app`).
 
 ### Função "criar-usuario" (obrigatória para cadastrar alunos e admins)
@@ -28,6 +28,11 @@ Criar contas com senha exige a chave secreta do Supabase, que **não pode** fica
 4. Clique em **Deploy**. Não é preciso configurar nenhuma chave: o Supabase já fornece as variáveis que a função usa.
 
 Se mudar o arquivo no futuro, abra a função no painel, cole o código novo e publique de novo.
+
+### Função "cadastro-aluno" (obrigatória para o aluno se cadastrar pelo link)
+1. Crie a função `cadastro-aluno` do mesmo jeito que a `criar-usuario`, colando `supabase/functions/cadastro-aluno/index.ts`.
+2. Nos detalhes da função, **desligue** a opção **Verify JWT** / **Enforce JWT verification** (quem se cadastra ainda não tem login).
+A conta é criada já confirmada (sem e-mail de confirmação) e com a ficha "a completar".
 
 ### Função "enviar-comprovante" (e-mail dos comprovantes)
 O aluno envia o comprovante pelo app e ele chega **sempre** no sino e na ficha do aluno. Para receber também por **e-mail**, com o arquivo em anexo:
@@ -41,9 +46,9 @@ O aluno envia o comprovante pelo app e ele chega **sempre** no sino e na ficha d
 Sem esses segredos, o envio continua funcionando no app, só não vai e-mail.
 
 ### Acesso dos alunos
-1. Em **Alunos → Novo aluno**, digite só o **e-mail** do aluno (para crianças, o do responsável).
-2. O app mostra uma **senha temporária** com botões para copiar ou enviar por WhatsApp. Passe para o aluno.
-3. No primeiro acesso, a pessoa é obrigada a **criar a própria senha** e **completar o cadastro** antes de usar o app. O cadastro é sempre do **responsável** (quem tem o login e paga). No bloco **"Quem vai fazer as aulas?"**, ela marca **"O próprio responsável"** ou informa o nome e a data de nascimento do dependente. Nas listas das turmas (equipe e professores) aparece o nome de quem faz as aulas. A **foto de perfil** de quem faz as aulas é obrigatória para concluir o cadastro; quem já tinha cadastro e ainda não tem foto vê a tela "Falta só a foto de perfil" no próximo login. A foto aparece pequena ao lado do nome (listas de alunos, turmas, painel do professor e do aluno) e amplia ao tocar. Fica num bucket **privado** (`perfis`): só o próprio aluno, a equipe e os professores veem. Na ficha, a equipe pode **trocar a foto**. O responsável também precisa aceitar o **Termo de uso e privacidade (LGPD)**, que fica registrado com data e versão na ficha (texto em `js/termo.js`, um rascunho para o jurídico revisar; ao mudar o texto, troque `TERMO_VERSAO`). Quem já tinha cadastro e ainda não aceitou vê o termo no próximo login. Para um segundo filho, cadastre outra ficha com o **mesmo e-mail** do responsável (*Cadastrar sem acesso ao app*): ela aparece automaticamente no app dele.
+1. Em **Alunos → Novo aluno** (ou no painel do professor), o app mostra o **link de cadastro** (`/#/cadastro`) com botões para enviar pelo **WhatsApp**, copiar, compartilhar ou mostrar o **QR Code**.
+2. A pessoa abre o link, cria o **e-mail e a senha** (para crianças, o e-mail do responsável) e entra direto no formulário.
+3. Ela é obrigada a **completar o cadastro** antes de usar o app. O cadastro é sempre do **responsável** (quem tem o login e paga). No bloco **"Quem vai fazer as aulas?"**, ela marca **"O próprio responsável"** ou informa o nome e a data de nascimento do dependente. Nas listas das turmas (equipe e professores) aparece o nome de quem faz as aulas. A **foto de perfil** de quem faz as aulas é obrigatória para concluir o cadastro; quem já tinha cadastro e ainda não tem foto vê a tela "Falta só a foto de perfil" no próximo login. A foto aparece pequena ao lado do nome (listas de alunos, turmas, painel do professor e do aluno) e amplia ao tocar. Fica num bucket **privado** (`perfis`): só o próprio aluno, a equipe e os professores veem. Na ficha, a equipe pode **trocar a foto**. O responsável também precisa aceitar o **Termo de uso e privacidade (LGPD)**, que fica registrado com data e versão na ficha (texto em `js/termo.js`, um rascunho para o jurídico revisar; ao mudar o texto, troque `TERMO_VERSAO`). Quem já tinha cadastro e ainda não aceitou vê o termo no próximo login. Para um segundo filho, cadastre outra ficha com o **mesmo e-mail** do responsável (*Cadastrar sem acesso ao app*): ela aparece automaticamente no app dele.
 4. Esqueceu a senha? Na ficha do aluno, use **Gerar nova senha**.
 5. Aluno sem e-mail: em **Novo aluno**, use *Cadastrar sem acesso ao app* (cadastro manual, como antes).
 6. A ficha mostra se o aluno já tem **acesso ao app** ou se está **aguardando o 1º acesso**. Se você trocar o e-mail da ficha, o acesso antigo é desligado; use **Criar acesso ao app** na ficha.
@@ -67,7 +72,7 @@ Para publicar, envie a pasta inteira para qualquer hospedagem estática (Netlify
 
 **Gestor, admins e professores:** quem foi cadastrado como gestor no passo 2 é o **gestor principal**. Na aba **Equipe**, ele adiciona ou remove admins e professores pelo e-mail; os admins também usam essa aba, mas só para adicionar, remover e escolher as aulas dos professores. Ao adicionar alguém, o app gera uma senha temporária; no primeiro acesso a pessoa cria a própria senha.
 - **Admins** têm as mesmas permissões do gestor, mas não mexem na equipe.
-- **Professores** só veem a aba **Meus alunos**: os alunos (e a lista de espera) das aulas atribuídas a eles, separados por turma, com idade, responsável, telefone e atalho para o WhatsApp. Também cadastram alunos novos (por e-mail, com senha temporária) e abrem o **QR Code** do app. Não veem valores, pagamentos, relatórios nem as fichas completas. As aulas de cada professor são escolhidas ao criá-lo e podem ser trocadas no botão **Aulas** da aba Equipe. Depois que o professor cadastra um aluno, a recepção faz a inscrição na aula e na turma.
+- **Professores** só veem a aba **Meus alunos**: os alunos (e a lista de espera) das aulas atribuídas a eles, separados por turma, com idade, responsável, telefone e atalho para o WhatsApp. Também enviam o link de cadastro para alunos novos e abrem o **QR Code** do app. Não veem valores, pagamentos, relatórios nem as fichas completas. As aulas de cada professor são escolhidas ao criá-lo e podem ser trocadas no botão **Aulas** da aba Equipe. Depois que o professor cadastra um aluno, a recepção faz a inscrição na aula e na turma.
 
 **Atalho no celular:** ao adicionar o site à tela inicial, o nome sugerido é **CEVISA FITNESS** e o ícone é o símbolo da logo (`assets/icon-*.png`, `assets/apple-touch-icon.png` e `manifest.webmanifest`).
 

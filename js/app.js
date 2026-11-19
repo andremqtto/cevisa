@@ -95,7 +95,7 @@ function atualizarWhatsApp() {
 }
 
 // ------------------------------------------------------------------ login
-// Não há cadastro pelo próprio aluno: gestores/admins criam o acesso com senha temporária.
+// O aluno cria o próprio acesso pelo link de cadastro (#/cadastro) que a equipe compartilha.
 export function abrirLogin() {
   if (document.querySelector('#f-login')) return;
   const m = abrirModal({
@@ -110,7 +110,7 @@ export function abrirLogin() {
         <div id="login-erro"></div>
         <div class="acoes"><button class="btn" type="submit" style="width:100%">Entrar</button></div>
       </form>
-      <p class="login-troca">Ainda não tem acesso ou esqueceu a senha? Fale com a recepção.</p>`,
+      <p class="login-troca">Esqueceu a senha? Fale com a recepção.</p>`,
   });
   const form = m.el.querySelector('#f-login');
   const erro = (t) => { m.el.querySelector('#login-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
@@ -199,8 +199,23 @@ async function rotear() {
   const partes = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   let rota = partes[0] || '';
 
-  // Visitante: só a tela de aulas. Rotas de gestor pedem login.
+  // Visitante: tela de aulas ou o cadastro pelo link (#/cadastro). Rotas de gestor pedem login.
   if (!estado.papel) {
+    if (rota === 'cadastro') {
+      desenharTopo('');
+      window.scrollTo(0, 0);
+      const { renderCadastro } = await import('./cadastro.js');
+      if (minha !== versaoRota) return;
+      renderCadastro(raiz, {
+        abrirLogin,
+        aoEntrar: async () => {
+          await verificarPapel();
+          history.replaceState(null, '', '#/');
+          await rotear();
+        },
+      });
+      return;
+    }
     if (rota) history.replaceState(null, '', '#/');
     desenharTopo('');
     window.scrollTo(0, 0);
