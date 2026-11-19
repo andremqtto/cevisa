@@ -183,7 +183,7 @@ export async function abrirQrCode({ url = urlApp(), titulo = 'QR Code do app', t
 // ================================================================== NOVO ALUNO (link de cadastro)
 // A equipe envia o link; a própria pessoa cria e-mail e senha e preenche o cadastro (dados, vínculo, foto e termo).
 // professor: true → sem a opção de cadastro manual (o professor não acessa fichas).
-const MSG_CADASTRO = 'Olá! Para fazer seu cadastro no app do Spa Médico Adventista Cevisa, acesse o link abaixo, crie seu e-mail e senha e preencha seus dados:';
+const MSG_CADASTRO = 'Olá! \u{1F44B}\nPara se inscrever em uma das modalidades esportivas oferecidas pelo Spa Médico Adventista Cevisa, acesse o link abaixo e faça seu cadastro no aplicativo.';
 
 export function novoAluno(navegar, { professor = false } = {}) {
   const link = linkCadastro();
@@ -195,7 +195,7 @@ export function novoAluno(navegar, { professor = false } = {}) {
       <p style="margin-top:0">Envie este link para a pessoa. Ela mesma cria o <strong>e-mail e a senha</strong> e preenche o cadastro: dados, vínculo (externo, funcionário ou prestador), quem vai fazer as aulas, foto e termo.</p>
       <div class="link-cadastro"><span>${esc(link)}</span></div>
       <div class="link-cadastro-acoes">
-        <a class="btn whats" href="https://wa.me/?text=${encodeURIComponent(`${MSG_CADASTRO}\n${link}`)}" target="_blank" rel="noopener">${ICONE_WHATSAPP}Enviar pelo WhatsApp</a>
+        <a class="btn whats" href="https://wa.me/?text=${encodeURIComponent(`${MSG_CADASTRO}\n\n\u{1F449} ${link}`)}" target="_blank" rel="noopener">${ICONE_WHATSAPP}Enviar pelo WhatsApp</a>
         <button class="btn sec" type="button" data-copiar>Copiar link</button>
         ${podeCompartilhar ? '<button class="btn sec" type="button" data-compartilhar>Compartilhar</button>' : ''}
         <button class="btn sec" type="button" data-qr>Mostrar QR Code</button>
