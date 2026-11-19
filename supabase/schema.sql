@@ -865,6 +865,20 @@ end $$;
 revoke all on function public.excluir_aluno(uuid) from public, anon;
 grant execute on function public.excluir_aluno(uuid) to authenticated;
 
+-- Exclui a aula MESMO com histórico: apaga junto as matrículas (ativas, na fila e encerradas),
+-- os pagamentos, trancamentos e avisos ligados a elas. As diárias ficam (sem modalidade).
+create or replace function public.excluir_aula(p_aula uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_gestor() then raise exception 'Acesso negado.'; end if;
+  perform 1 from public.aulas where id = p_aula for update;
+  if not found then raise exception 'Aula não encontrada.'; end if;
+  delete from public.matriculas where aula_id = p_aula;
+  delete from public.aulas where id = p_aula;
+end $$;
+revoke all on function public.excluir_aula(uuid) from public, anon;
+grant execute on function public.excluir_aula(uuid) to authenticated;
+
 -- Relatório mensal.
 create or replace function public.relatorio_mensal(p_ano int, p_mes int)
 returns jsonb language plpgsql security definer set search_path = public as $$

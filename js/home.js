@@ -360,16 +360,31 @@ function editarAula(aula, aoSalvar) {
 
   m.el.querySelector('[data-excluir]')?.addEventListener('click', async (e) => {
     const botao = e.currentTarget;
-    const sim = await confirmar(`Excluir a aula “${a.nome}”? Se houver alunos matriculados, a exclusão não será permitida (use “Exibir esta aula” desmarcado para ocultá-la).`, { titulo: 'Excluir aula', confirmarTexto: 'Excluir', perigo: true });
-    if (!sim) return;
+    // conta o que será apagado junto (matrículas e pagamentos recebidos)
+    let mats = [], pagos = [];
+    try {
+      mats = ok(await sb.from('matriculas').select('id,status').eq('aula_id', a.id)) || [];
+      if (mats.length) {
+        pagos = ok(await sb.from('pagamentos').select('valor').eq('status', 'pago').in('matricula_id', mats.map((x) => x.id))) || [];
+      }
+    } catch (err) { return erro(err.message); }
+    const ativos = mats.filter((x) => x.status !== 'encerrada').length;
+    const recebido = pagos.reduce((t, p) => t + Number(p.valor || 0), 0);
+    const msg = mats.length
+      ? `Excluir a aula “${a.nome}” e TODO o histórico dela? Serão apagados: ${mats.length} matrícula(s)`
+        + (ativos ? ` (${ativos} de aluno(s) ainda ativo(s) ou na fila)` : '')
+        + `${pagos.length ? ` e ${pagos.length} pagamento(s) recebido(s), somando ${money(recebido)}, que deixam de aparecer nos relatórios` : ''}.`
+        + ' Isso não pode ser desfeito. Para só esconder a aula, desmarque “Exibir esta aula na tela pública”.'
+      : `Excluir a aula “${a.nome}”? Isso não pode ser desfeito.`;
+    if (!(await confirmar(msg, { titulo: 'Excluir aula', confirmarTexto: mats.length ? 'Excluir tudo' : 'Excluir', perigo: true }))) return;
     await comBotao(botao, async () => {
       try {
-        ok(await sb.from('aulas').delete().eq('id', a.id));
+        ok(await sb.rpc('excluir_aula', { p_aula: a.id }));
         toast('Aula excluída.');
         m.fechar();
         aoSalvar();
       } catch (err) {
-        erro(err.code === '23503' ? 'Esta aula tem alunos (ou histórico) ligados a ela. Desmarque “Exibir esta aula” para ocultá-la.' : err.message);
+        erro(err.message);
       }
     });
   });
