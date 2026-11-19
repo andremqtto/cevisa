@@ -101,7 +101,7 @@ const aulaLotada = (a, turmas) => (turmas.length ? turmas.every((t) => t.lotada)
 
 /** Situação do aluno (ou alunos do mesmo responsável) nesta aula: botão de inscrição/fila ou selo. */
 function inscricaoAluno(a, turmas, alunos) {
-  if (!alunos) return '';
+  if (!alunos?.length) return '';
   const estados = alunos.map((al) => {
     const m = al.matriculas.find((x) => x.aula_id === a.id);
     if (m) return m.status === 'espera' ? 'espera' : 'inscrito';
@@ -269,8 +269,9 @@ function gerenciarTurmas(aula, aoMudar) {
     const erro = (x) => { m.el.querySelector('#t-erro').innerHTML = x ? `<div class="aviso erro">${esc(x)}</div>` : ''; };
     m.el.querySelector('[data-voltar]').onclick = listar;
     m.el.querySelector('[data-excluir]')?.addEventListener('click', async (e) => {
+      const botao = e.currentTarget;
       if (!(await confirmar(`Excluir a turma “${t.nome}”?`, { titulo: 'Excluir turma', confirmarTexto: 'Excluir', perigo: true }))) return;
-      await comBotao(e.currentTarget, async () => {
+      await comBotao(botao, async () => {
         try {
           ok(await sb.from('turmas').delete().eq('id', t.id));
           mudou = true;
@@ -358,9 +359,10 @@ function editarAula(aula, aoSalvar) {
   });
 
   m.el.querySelector('[data-excluir]')?.addEventListener('click', async (e) => {
+    const botao = e.currentTarget;
     const sim = await confirmar(`Excluir a aula “${a.nome}”? Se houver alunos matriculados, a exclusão não será permitida (use “Exibir esta aula” desmarcado para ocultá-la).`, { titulo: 'Excluir aula', confirmarTexto: 'Excluir', perigo: true });
     if (!sim) return;
-    await comBotao(e.currentTarget, async () => {
+    await comBotao(botao, async () => {
       try {
         ok(await sb.from('aulas').delete().eq('id', a.id));
         toast('Aula excluída.');

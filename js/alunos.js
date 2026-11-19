@@ -545,23 +545,26 @@ export async function renderFicha(el, id, { navegar }) {
     }
   });
   el.querySelector('#nova-senha')?.addEventListener('click', async (e) => {
+    const botao = e.currentTarget;
     if (!(await confirmar(`Gerar uma nova senha temporária para ${aluno.nome}? A senha atual dele deixa de funcionar.`, { titulo: 'Nova senha', confirmarTexto: 'Gerar nova senha' }))) return;
-    await comBotao(e.currentTarget, async () => {
+    await comBotao(botao, async () => {
       const r = await chamarCriarUsuario({ acao: 'nova_senha', user_id: aluno.user_id });
       mostrarCredenciais({ titulo: 'Nova senha temporária', email: r.email || aluno.email, senha: r.senha });
     });
   });
   el.querySelector('#criar-acesso')?.addEventListener('click', async (e) => {
-    await comBotao(e.currentTarget, async () => {
+    const botao = e.currentTarget;
+    await comBotao(botao, async () => {
       const r = await chamarCriarUsuario({ acao: 'criar_aluno', email: aluno.email });
       recarregar();
       mostrarCredenciais({ email: r.email, senha: r.senha });
     });
   });
   el.querySelector('#alternar').onclick = async (e) => {
+    const botao = e.currentTarget;
     const novoEstado = !aluno.ativo;
     if (!novoEstado && !(await confirmar(`Desativar ${aluno.nome}? As matrículas continuam registradas, mas o aluno fica marcado como inativo.`, { titulo: 'Desativar aluno', confirmarTexto: 'Desativar', perigo: true }))) return;
-    await comBotao(e.currentTarget, async () => {
+    await comBotao(botao, async () => {
       ok(await sb.from('alunos').update({ ativo: novoEstado }).eq('id', id));
       toast(novoEstado ? 'Aluno ativado.' : 'Aluno desativado.');
       recarregar();
