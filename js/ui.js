@@ -299,6 +299,68 @@ export function lerParticipante(form) {
   return { proprio, nome: proprio ? null : nome, nascimento: proprio ? null : nascimento };
 }
 
+// ---------------------------------------------------------------- vínculo (externo, funcionário, prestador)
+// Mesma regra do banco (_preco_aluno): funcionário não paga; prestador paga R$ 100,00 no plano mensal;
+// externo paga o preço normal. Aulas de um DEPENDENTE têm sempre o preço normal.
+export const PRESTADOR_MENSAL = 100;
+export const VINCULOS = {
+  externo: { nome: 'Externo', regra: 'Preço normal das aulas.' },
+  funcionario: { nome: 'Funcionário', regra: 'Aulas sem custo.' },
+  prestador: { nome: 'Prestador', regra: `Plano mensal de ${money(PRESTADOR_MENSAL)} em todas as aulas.` },
+};
+
+/** Vínculo que vale para o preço (dependente = externo). Aceita a ficha completa ou o item do painel_aluno. */
+export const vinculoPreco = (a) => (!a || a.participante_proprio === false ? 'externo' : (a.vinculo || 'externo'));
+
+/** Preço de um plano para o vínculo; null = plano sem preço definido. */
+export function precoVinculo(valor, plano, vinculo) {
+  if (valor === null || valor === undefined || valor === '') return null;
+  if (vinculo === 'funcionario') return 0;
+  if (vinculo === 'prestador' && plano === 'mensal') return PRESTADOR_MENSAL;
+  return Number(valor);
+}
+
+/** Valor para exibir: "Sem custo" quando é zero. */
+export const moneyOuIsento = (v) => (Number(v) === 0 ? 'Sem custo' : money(v));
+
+/** Opções "Externo / Funcionário / Prestador" para o cadastro (rádio obrigatório). */
+export function camposVinculo(atual = null, { gestor = false } = {}) {
+  return `
+    <fieldset class="vinculo">
+      <legend>${gestor ? 'Vínculo com o Cevisa' : 'Qual é o seu vínculo com o Cevisa? *'}</legend>
+      ${Object.entries(VINCULOS).map(([v, d]) => `
+        <label class="check vinculo-opcao"><input type="radio" name="vinculo" value="${v}" ${atual === v ? 'checked' : ''}>
+          <span><strong>${d.nome}</strong><small>${d.regra}</small></span></label>`).join('')}
+      <p class="vinculo-obs">${gestor ? '' : 'Funcionário e prestador: a recepção confirma e o preço passa a valer. '}Se as aulas forem para um <strong>dependente</strong>, valem os preços normais.</p>
+    </fieldset>`;
+}
+
+/**
+ * Link do WhatsApp com a mensagem de cobrança pronta (vai para o telefone do responsável).
+ * p: cobrança { valor, vencimento, plano, aula }; aluno: ficha { nome, telefone, participante_* }.
+ * Devolve null se o aluno não tiver telefone.
+ */
+export function linkCobrancaWhatsApp(p, aluno) {
+  if (!aluno?.telefone) return null;
+  const hoje = hojeISO();
+  const primeiro = (aluno.nome || '').trim().split(/\s+/)[0] || '';
+  const quem = nomeParticipante(aluno);
+  const dias = p.vencimento < hoje ? diasEntre(p.vencimento, hoje) : 0;
+  const quando = dias ? `venceu em ${fmtDate(p.vencimento)} (há ${dias} dia${dias > 1 ? 's' : ''})`
+    : p.vencimento === hoje ? 'vence hoje' : `vence em ${fmtDate(p.vencimento)}`;
+  const linhas = [
+    `Olá, ${primeiro}! Tudo bem? Aqui é da recepção do Spa Médico Adventista Cevisa.`,
+    '',
+    `A mensalidade de *${p.aula || 'sua aula'}*${quem && quem !== aluno.nome ? ` (${quem.split(' ')[0]})` : ''}, no valor de *${money(p.valor)}*, ${quando}.`,
+    '',
+    config.APP_URL ? `Você pode pagar pelo app, no botão *Pagar com Pix*: ${config.APP_URL}` : '',
+    config.PIX_CHAVE ? `Ou pela chave Pix (${config.PIX_TIPO || 'chave'}): ${config.PIX_EXIBICAO || config.PIX_CHAVE}` : '',
+    '',
+    'Depois, é só enviar o comprovante pelo app. Se já pagou, por favor desconsidere esta mensagem. Obrigado!',
+  ].filter((l, i, arr) => l !== '' || (arr[i - 1] !== '' && i > 0));
+  return linkWhatsAppPara(aluno.telefone, linhas.join('\n').trim());
+}
+
 /** Link wa.me para o telefone de um aluno (DDD + número; sem DDI assume Brasil), ou null se inválido. */
 export function linkWhatsAppPara(telefone, mensagem = '') {
   let n = String(telefone || '').replace(/\D/g, '').replace(/^0+/, '');

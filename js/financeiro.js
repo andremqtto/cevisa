@@ -2,7 +2,7 @@
 import { sb, ok } from './supabase.js';
 import {
   esc, money, fmtDate, fmtMes, planoLabel, hojeISO, diasEntre, abrirModal, toast, confirmar,
-  comBotao, carregando, vazio, erroBox,
+  comBotao, carregando, vazio, erroBox, linkCobrancaWhatsApp, ICONE_WHATSAPP,
 } from './ui.js';
 
 const FORMAS = ['Pix', 'Dinheiro', 'Cartão de débito', 'Cartão de crédito', 'Boleto', 'Transferência'];
@@ -159,7 +159,7 @@ export async function renderCobrancas(el, { navegar }) {
     if (aba === 'diarias') return carregarDiarias();
     try {
       const hoje = hojeISO();
-      const base = sb.from('pagamentos').select('*, alunos(id,nome,ativo), matriculas(aulas(nome))');
+      const base = sb.from('pagamentos').select('*, alunos(id,nome,ativo,telefone,participante_proprio,participante_nome), matriculas(aulas(nome))');
       if (aba === 'pagas') dados = ok(await base.eq('status', 'pago').order('pago_em', { ascending: false }).limit(200));
       else dados = ok(await base.eq('status', 'pendente').order('vencimento'));
       if (aba === 'atrasadas') dados = dados.filter((p) => p.vencimento < hoje);
@@ -239,7 +239,7 @@ export async function renderCobrancas(el, { navegar }) {
           <td>${aba === 'pagas' ? esc(p.forma || '—')
             : atraso ? `<span class="badge erro">${dias} dia(s) de atraso</span>`
             : p.vencimento === hoje ? '<span class="badge alerta">Vence hoje</span>' : '<span class="badge">A vencer</span>'}</td>
-          <td class="num">${p.status === 'pendente' ? `<button class="btn pequeno" type="button" data-pagar="${p.id}">Registrar pagamento</button>` : ''}</td>
+          <td class="num acoes-cobranca">${(() => { const z = p.status === 'pendente' && linkCobrancaWhatsApp({ valor: p.valor, vencimento: p.vencimento, aula: p.matriculas?.aulas?.nome }, p.alunos); return z ? `<a class="btn pequeno whats" href="${esc(z)}" target="_blank" rel="noopener" title="Enviar a cobrança pelo WhatsApp">${ICONE_WHATSAPP}Cobrar</a> ` : ''; })()}${p.status === 'pendente' ? `<button class="btn pequeno" type="button" data-pagar="${p.id}">Registrar pagamento</button>` : ''}</td>
         </tr>`;
       }).join('')}</tbody></table></div>`;
   }

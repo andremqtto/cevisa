@@ -152,6 +152,26 @@ alter table public.alunos add column if not exists participante_nascimento date;
 -- Foto de perfil de quem faz as aulas (caminho no bucket privado "perfis": <id do aluno>/<arquivo>).
 alter table public.alunos add column if not exists foto text;
 
+-- Termo de uso e privacidade (LGPD): quando o responsável aceitou e qual versão do texto.
+alter table public.alunos add column if not exists termo_aceito_em timestamptz;
+alter table public.alunos add column if not exists termo_versao    text;
+
+-- Vínculo com o Cevisa (define o preço): externo = preço normal; funcionario = aulas sem custo;
+-- prestador = plano mensal de R$ 100,00 (semestral/anual com preço normal).
+-- O responsável DECLARA no cadastro (vinculo_declarado) e a equipe CONFIRMA (vinculo) — só o confirmado vale.
+-- Se as aulas forem de um DEPENDENTE, vale sempre o preço normal.
+alter table public.alunos add column if not exists vinculo           text not null default 'externo';
+alter table public.alunos add column if not exists vinculo_declarado text;
+alter table public.alunos drop constraint if exists alunos_vinculo_check;
+alter table public.alunos add constraint alunos_vinculo_check check (vinculo in ('externo','funcionario','prestador'));
+alter table public.alunos drop constraint if exists alunos_vinculo_declarado_check;
+alter table public.alunos add constraint alunos_vinculo_declarado_check
+  check (vinculo_declarado is null or vinculo_declarado in ('externo','funcionario','prestador'));
+alter table public.alunos drop column if exists funcionario;
+alter table public.alunos drop column if exists funcionario_declarado;
+drop function if exists public.declarar_funcionario(uuid);
+drop function if exists public.definir_funcionario(uuid, boolean);
+
 -- Nome de quem faz as aulas (o dependente, ou o próprio responsável).
 create or replace function public._participante(a public.alunos)
 returns text language sql immutable as $$
@@ -231,7 +251,7 @@ create index if not exists comprovantes_aluno_idx on public.comprovantes (aluno_
 alter table public.notificacoes add column if not exists solicitacao_id uuid references public.solicitacoes_inscricao(id) on delete cascade;
 alter table public.notificacoes drop constraint if exists notificacoes_tipo_check;
 alter table public.notificacoes add constraint notificacoes_tipo_check
-  check (tipo in ('vence_em_breve','vencido','vaga_liberada','pagamento_informado','inscricao_solicitada','comprovante_enviado'));
+  check (tipo in ('vence_em_breve','vencido','vaga_liberada','pagamento_informado','inscricao_solicitada','comprovante_enviado','vinculo_declarado','trancamento_solicitado'));
 
 -- Se o gestor trocar o e-mail do aluno, o acesso antigo deixa de valer.
 create or replace function public._tg_alunos_email()
@@ -383,6 +403,41 @@ returns numeric language sql stable security definer set search_path = public as
   from public.aulas where id = p_aula;
 $$;
 
+-- Vínculo que vale para o preço: dependente sempre paga o preço normal (externo).
+create or replace function public._vinculo_preco(a public.alunos)
+returns text language sql immutable as $$
+  select case when a.participante_proprio then coalesce(a.vinculo, 'externo') else 'externo' end;
+$$;
+
+-- Preço do plano para um aluno, conforme o vínculo confirmado (null = plano sem preço definido).
+create or replace function public._preco_aluno(p_aluno uuid, p_aula uuid, p_plano text)
+returns numeric language sql stable security definer set search_path = public as $$
+  select case when b.base is null then null
+              when v.vinculo = 'funcionario' then 0
+              when v.vinculo = 'prestador' and p_plano = 'mensal' then 100.00
+              else round(b.base, 2) end
+    from (select public._preco_do_plano(p_aula, p_plano) as base) b
+    left join lateral (select public._vinculo_preco(a) as vinculo from public.alunos a where a.id = p_aluno) v on true;
+$$;
+revoke all on function public._preco_aluno(uuid, uuid, text) from public, anon, authenticated;
+
+-- Cobranças pendentes de valor ZERO de funcionário são quitadas automaticamente e renovam o plano.
+create or replace function public._quitar_isentos(p_matricula uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare p public.pagamentos;
+begin
+  for p in select pg.* from public.pagamentos pg join public.matriculas m on m.id = pg.matricula_id
+            where pg.matricula_id = p_matricula and pg.status = 'pendente' and pg.valor = 0 and m.status = 'ativa'
+              and public._preco_aluno(m.aluno_id, m.aula_id, pg.plano) = 0
+            for update of pg loop
+    update public.pagamentos set status = 'pago', pago_em = current_date, forma = 'Isento (funcionário)' where id = p.id;
+    update public.matriculas set data_fim = (data_fim + make_interval(months => p.meses))::date where id = p.matricula_id;
+    update public.notificacoes set lida = true
+     where matricula_id = p.matricula_id and tipo in ('vence_em_breve','vencido');
+  end loop;
+end $$;
+revoke all on function public._quitar_isentos(uuid) from public, anon, authenticated;
+
 -- Cria a cobrança pendente de uma matrícula (se ainda não houver uma).
 create or replace function public._criar_cobranca(p_matricula uuid)
 returns void language plpgsql security definer set search_path = public as $$
@@ -394,8 +449,10 @@ begin
   insert into public.pagamentos (matricula_id, aluno_id, plano, meses, competencia, valor, vencimento)
   values (m.id, m.aluno_id, m.plano, public._meses_do_plano(m.plano),
           date_trunc('month', m.data_fim)::date,
-          coalesce(public._preco_do_plano(m.aula_id, m.plano), 0),
+          coalesce(public._preco_aluno(m.aluno_id, m.aula_id, m.plano), 0),
           m.data_fim);
+  -- funcionário (valor zero): não há o que cobrar — quita e renova o plano na hora
+  perform public._quitar_isentos(m.id);
 end $$;
 
 -- Vagas de um "grupo": a turma (se houver) ou a aula inteira (matrículas sem turma).
@@ -682,6 +739,101 @@ begin
   update public.matriculas set data_fim = (data_fim - interval '1 month')::date where id = t.matricula_id;
 end $$;
 
+-- ---------------------------------------------------------------------
+-- Pedidos de trancamento feitos pelo ALUNO no app: sempre o PRÓXIMO mês, em qualquer dia.
+-- A equipe aprova (o mês vai para o final do plano) ou recusa.
+-- ---------------------------------------------------------------------
+create table if not exists public.trancamento_pedidos (
+  id            uuid primary key default gen_random_uuid(),
+  matricula_id  uuid not null references public.matriculas(id) on delete cascade,
+  aluno_id      uuid not null references public.alunos(id) on delete cascade,
+  mes           date not null,                                   -- 1º dia do mês a trancar
+  status        text not null default 'pendente' check (status in ('pendente','aprovado','recusado')),
+  created_at    timestamptz not null default now(),
+  resolvido_em  timestamptz,
+  resolvido_por uuid references auth.users(id) on delete set null
+);
+create unique index if not exists trancamento_pedidos_um_pendente
+  on public.trancamento_pedidos (matricula_id, mes) where status = 'pendente';
+alter table public.trancamento_pedidos enable row level security;
+drop policy if exists tranc_pedidos_gestor on public.trancamento_pedidos;
+create policy tranc_pedidos_gestor on public.trancamento_pedidos for all to authenticated
+  using (public.is_gestor()) with check (public.is_gestor());
+grant select, insert, update, delete on public.trancamento_pedidos to authenticated;
+grant all on public.trancamento_pedidos to service_role;
+
+-- Tranca o mês sem a regra "ainda não começou" (usado na aprovação de um pedido feito antes do mês começar).
+create or replace function public._trancar(p_matricula uuid, p_mes date)
+returns void language plpgsql security definer set search_path = public as $$
+declare m public.matriculas; v_mes date := date_trunc('month', p_mes)::date;
+begin
+  select * into m from public.matriculas where id = p_matricula for update;
+  if not found or m.status <> 'ativa' then raise exception 'Matrícula ativa não encontrada.'; end if;
+  if m.plano = 'mensal' then raise exception 'Só é possível trancar em planos semestral ou anual.'; end if;
+  if v_mes < date_trunc('month', m.data_inicio)::date or v_mes >= m.data_fim then
+    raise exception 'Esse mês está fora do período pago do plano (até %).', to_char(m.data_fim, 'DD/MM/YYYY');
+  end if;
+  if exists (select 1 from public.trancamentos where matricula_id = m.id and mes = v_mes) then
+    raise exception 'Este mês já está trancado.';
+  end if;
+  insert into public.trancamentos (matricula_id, mes) values (m.id, v_mes);
+  update public.matriculas set data_fim = (data_fim + interval '1 month')::date where id = m.id;
+end $$;
+revoke all on function public._trancar(uuid, date) from public, anon, authenticated;
+
+-- O aluno pede para trancar o PRÓXIMO mês. A equipe recebe aviso no sino.
+create or replace function public.solicitar_trancamento(p_matricula uuid)
+returns date language plpgsql security definer set search_path = public as $$
+declare m public.matriculas; a public.alunos; v_aula text;
+        v_mes date := (date_trunc('month', current_date) + interval '1 month')::date;
+begin
+  if auth.uid() is null then raise exception 'Acesso negado.'; end if;
+  select mt.* into m from public.matriculas mt join public.alunos al on al.id = mt.aluno_id
+   where mt.id = p_matricula and al.user_id = auth.uid();
+  if not found or m.status <> 'ativa' then raise exception 'Matrícula ativa não encontrada.'; end if;
+  if m.plano = 'mensal' then raise exception 'O trancamento é só para os planos semestral e anual.'; end if;
+  if v_mes >= m.data_fim then
+    raise exception 'O próximo mês não está dentro do período pago do seu plano (até %). Fale com a recepção.', to_char(m.data_fim, 'DD/MM/YYYY');
+  end if;
+  if exists (select 1 from public.trancamentos where matricula_id = m.id and mes = v_mes) then
+    raise exception 'O próximo mês já está trancado.';
+  end if;
+  if exists (select 1 from public.trancamento_pedidos where matricula_id = m.id and mes = v_mes and status = 'pendente') then
+    raise exception 'Você já pediu o trancamento do próximo mês. Aguarde a recepção aprovar.';
+  end if;
+  select * into a from public.alunos where id = m.aluno_id;
+  select nome into v_aula from public.aulas where id = m.aula_id;
+  insert into public.trancamento_pedidos (matricula_id, aluno_id, mes) values (m.id, m.aluno_id, v_mes);
+  insert into public.notificacoes (tipo, aluno_id, matricula_id, referencia, mensagem)
+  values ('trancamento_solicitado', m.aluno_id, m.id, v_mes,
+          public._participante(a) || ' pediu para trancar ' || to_char(v_mes, 'MM/YYYY') || ' em ' || v_aula
+          || '. Toque para aprovar ou recusar na ficha do aluno.')
+  on conflict (matricula_id, tipo, referencia)
+  do update set mensagem = excluded.mensagem, lida = false, created_at = now();
+  return v_mes;
+end $$;
+revoke all on function public.solicitar_trancamento(uuid) from public, anon;
+grant execute on function public.solicitar_trancamento(uuid) to authenticated;
+
+-- A equipe aprova (tranca o mês e estende o plano) ou recusa o pedido.
+create or replace function public.responder_trancamento(p_pedido uuid, p_aprovar boolean)
+returns void language plpgsql security definer set search_path = public as $$
+declare p public.trancamento_pedidos;
+begin
+  if not public.is_gestor() then raise exception 'Acesso negado.'; end if;
+  select * into p from public.trancamento_pedidos where id = p_pedido for update;
+  if not found or p.status <> 'pendente' then raise exception 'Pedido não encontrado ou já respondido.'; end if;
+  if p_aprovar then perform public._trancar(p.matricula_id, p.mes); end if;
+  update public.trancamento_pedidos
+     set status = case when p_aprovar then 'aprovado' else 'recusado' end,
+         resolvido_em = now(), resolvido_por = auth.uid()
+   where id = p.id;
+  update public.notificacoes set lida = true
+   where matricula_id = p.matricula_id and tipo = 'trancamento_solicitado' and referencia = p.mes;
+end $$;
+revoke all on function public.responder_trancamento(uuid, boolean) from public, anon;
+grant execute on function public.responder_trancamento(uuid, boolean) to authenticated;
+
 -- Exclui o aluno PERMANENTEMENTE: ficha, matrículas, pagamentos, trancamentos e notificações (cascade).
 -- Libera as vagas (chamando a lista de espera) e apaga o login do aluno, se ele não for da equipe
 -- e não tiver outras fichas (ex.: irmãos com o mesmo e-mail do responsável).
@@ -825,14 +977,18 @@ declare r jsonb;
 begin
   if auth.uid() is null then raise exception 'Acesso negado.'; end if;
   select coalesce(jsonb_agg(jsonb_build_object(
-           'id', a.id, 'nome', a.nome, 'participante', public._participante(a), 'foto', a.foto, 'ativo', a.ativo, 'cadastro_completo', a.cadastro_completo,
+           'id', a.id, 'nome', a.nome, 'participante', public._participante(a), 'foto', a.foto, 'vinculo', public._vinculo_preco(a), 'vinculo_declarado', a.vinculo_declarado, 'ativo', a.ativo, 'cadastro_completo', a.cadastro_completo,
            'matriculas', coalesce((
               select jsonb_agg(jsonb_build_object(
                        'id', m.id, 'aula_id', m.aula_id, 'status', m.status, 'plano', m.plano,
                        'data_inicio', m.data_inicio, 'data_fim', m.data_fim,
                        'aula', au.nome, 'horarios', coalesce(t.horarios, au.horarios),
                        'turma_id', m.turma_id, 'turma', t.nome,
-                       'preco', public._preco_do_plano(m.aula_id, m.plano),
+                       'trancados', coalesce((select jsonb_agg(tr.mes order by tr.mes) from public.trancamentos tr where tr.matricula_id = m.id), '[]'::jsonb),
+                       'tranc_pedido', (select jsonb_build_object('mes', tp.mes, 'status', tp.status) from public.trancamento_pedidos tp
+                                         where tp.matricula_id = m.id and tp.mes >= date_trunc('month', current_date)::date
+                                         order by tp.created_at desc limit 1),
+                       'preco', public._preco_aluno(a.id, m.aula_id, m.plano),
                        'pendente', (select jsonb_build_object('id', p.id, 'valor', p.valor, 'vencimento', p.vencimento)
                                       from public.pagamentos p
                                      where p.matricula_id = m.id and p.status = 'pendente'
@@ -872,7 +1028,7 @@ begin
     raise exception 'Você já avisou o pagamento há poucos minutos. O gestor já foi notificado.';
   end if;
   for a in select id, nome from public.alunos where user_id = auth.uid() order by nome loop
-    select sum(coalesce(p.valor, public._preco_do_plano(m.aula_id, m.plano), 0)),
+    select sum(coalesce(p.valor, public._preco_aluno(m.aluno_id, m.aula_id, m.plano), 0)),
            min(coalesce(p.vencimento, m.data_fim))
       into v_total, v_venc
       from public.matriculas m
@@ -1023,15 +1179,79 @@ grant execute on function public.aceitar_convite_admin()         to authenticate
 -- ---------------------------------------------------------------------
 
 -- Cadastros do aluno logado que ainda precisam ser completados.
--- Fichas que o aluno ainda precisa completar: cadastro incompleto OU sem foto de perfil
--- (so_foto = já tem os dados, falta só a foto — alunos antigos).
+-- Fichas que o aluno ainda precisa completar: cadastro incompleto, sem foto de perfil
+-- ou sem o termo de privacidade aceito. so_complemento = já tem os dados (cadastros antigos):
+-- pede só o que falta (precisa_foto / precisa_termo).
 create or replace function public.aluno_cadastro_pendente()
 returns jsonb language sql stable security definer set search_path = public as $$
   select coalesce(jsonb_agg(jsonb_build_object(
            'id', a.id, 'email', a.email, 'nome', a.nome, 'participante', public._participante(a),
-           'so_foto', a.cadastro_completo) order by a.created_at), '[]'::jsonb)
-    from public.alunos a where a.user_id = auth.uid() and (not a.cadastro_completo or a.foto is null);
+           'so_complemento', a.cadastro_completo,
+           'precisa_foto', a.foto is null, 'precisa_termo', a.termo_aceito_em is null) order by a.created_at), '[]'::jsonb)
+    from public.alunos a
+   where a.user_id = auth.uid() and (not a.cadastro_completo or a.foto is null or a.termo_aceito_em is null);
 $$;
+
+-- O responsável informa no cadastro o vínculo (externo, funcionário ou prestador).
+-- Funcionário/prestador gera aviso para a equipe confirmar; até lá vale o preço normal.
+create or replace function public.declarar_vinculo(p_aluno uuid, p_vinculo text)
+returns void language plpgsql security definer set search_path = public as $$
+declare a public.alunos;
+begin
+  if auth.uid() is null then raise exception 'Acesso negado.'; end if;
+  if p_vinculo is null or p_vinculo not in ('externo','funcionario','prestador') then
+    raise exception 'Marque se você é externo, funcionário ou prestador.';
+  end if;
+  update public.alunos set vinculo_declarado = p_vinculo
+   where id = p_aluno and user_id = auth.uid()
+  returning * into a;
+  if not found then raise exception 'Cadastro não encontrado.'; end if;
+  if p_vinculo = 'externo' or a.vinculo = p_vinculo or not a.participante_proprio then return; end if;
+  insert into public.notificacoes (tipo, aluno_id, referencia, mensagem)
+  values ('vinculo_declarado', p_aluno, current_date,
+          a.nome || ' informou no cadastro que é '
+          || case p_vinculo when 'funcionario' then 'funcionário(a) — aulas sem custo'
+                            else 'prestador(a) de serviço — plano mensal de R$ 100,00' end
+          || '. Confirme na ficha para o preço passar a valer.')
+  on conflict (matricula_id, tipo, referencia) do update
+     set mensagem = excluded.mensagem, lida = false, created_at = now();
+end $$;
+revoke all on function public.declarar_vinculo(uuid, text) from public, anon;
+grant execute on function public.declarar_vinculo(uuid, text) to authenticated;
+
+-- A equipe confirma (ou muda) o vínculo. As cobranças PENDENTES do aluno são recalculadas na hora
+-- (as de valor zero, de funcionário, são quitadas e o plano renovado).
+create or replace function public.definir_vinculo(p_aluno uuid, p_vinculo text)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_mat uuid;
+begin
+  if not public.is_gestor() then raise exception 'Acesso negado.'; end if;
+  if p_vinculo is null or p_vinculo not in ('externo','funcionario','prestador') then raise exception 'Vínculo inválido.'; end if;
+  update public.alunos set vinculo = p_vinculo, vinculo_declarado = p_vinculo where id = p_aluno;
+  if not found then raise exception 'Aluno não encontrado.'; end if;
+  update public.pagamentos p
+     set valor = coalesce(public._preco_aluno(m.aluno_id, m.aula_id, m.plano), p.valor)
+    from public.matriculas m
+   where m.id = p.matricula_id and p.aluno_id = p_aluno and p.status = 'pendente';
+  for v_mat in select id from public.matriculas where aluno_id = p_aluno and status = 'ativa' loop
+    perform public._quitar_isentos(v_mat);
+  end loop;
+  update public.notificacoes set lida = true where aluno_id = p_aluno and tipo = 'vinculo_declarado';
+end $$;
+revoke all on function public.definir_vinculo(uuid, text) from public, anon;
+grant execute on function public.definir_vinculo(uuid, text) to authenticated;
+
+-- O responsável aceita o termo de uso e privacidade (LGPD) da ficha.
+create or replace function public.aceitar_termo(p_aluno uuid, p_versao text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then raise exception 'Acesso negado.'; end if;
+  update public.alunos set termo_aceito_em = now(), termo_versao = left(nullif(trim(p_versao), ''), 20)
+   where id = p_aluno and user_id = auth.uid();
+  if not found then raise exception 'Cadastro não encontrado.'; end if;
+end $$;
+revoke all on function public.aceitar_termo(uuid, text) from public, anon;
+grant execute on function public.aceitar_termo(uuid, text) to authenticated;
 
 -- O responsável completa os dados no primeiro acesso, dizendo quem vai fazer as aulas
 -- (ele mesmo, ou um dependente com nome e data de nascimento).
@@ -1054,6 +1274,9 @@ begin
   end if;
   if (select foto from public.alunos where id = p_aluno and user_id = auth.uid()) is null then
     raise exception 'Envie a foto de perfil para concluir o cadastro.';
+  end if;
+  if (select termo_aceito_em from public.alunos where id = p_aluno and user_id = auth.uid()) is null then
+    raise exception 'Aceite o termo de uso e privacidade para concluir o cadastro.';
   end if;
   update public.alunos
      set nome = left(trim(p_nome), 120),
@@ -1273,11 +1496,26 @@ select * from (values
 where not exists (select 1 from public.aulas);
 
 -- ---------------------------------------------------------------------
--- Opcional: rodar a verificação de vencimentos todo dia às 06:00 (horário de Brasília)
--- Ative a extensão pg_cron em Database > Extensions e descomente:
---
--- select cron.schedule('cevisa-pendencias', '0 9 * * *', $$select public._atualizar_pendencias()$$);
---
+-- Verificação AUTOMÁTICA de vencimentos (cobranças + avisos) todo dia às 06:00 e 12:00
+-- (horário de Brasília = 09:00 e 15:00 UTC), mesmo sem ninguém abrir o app.
+-- Usa a extensão pg_cron: o bloco tenta ativá-la sozinho. Se o Supabase não deixar,
+-- ative em Database > Extensions > pg_cron e rode este arquivo de novo.
+-- ---------------------------------------------------------------------
+do $$
+begin
+  begin
+    create extension if not exists pg_cron;
+  exception when others then
+    raise notice 'Não foi possível ativar o pg_cron automaticamente (%). Ative em Database > Extensions.', sqlerrm;
+  end;
+  if exists (select 1 from pg_extension where extname = 'pg_cron') then
+    perform cron.unschedule(jobid) from cron.job where jobname = 'cevisa-pendencias';
+    perform cron.schedule('cevisa-pendencias', '0 9,15 * * *', 'select public._atualizar_pendencias()');
+  end if;
+end $$;
+
+-- Para conferir se está agendado:   select jobname, schedule, active from cron.job;
+-- Para ver as últimas execuções:   select status, start_time, return_message from cron.job_run_details order by start_time desc limit 10;
 -- ---------------------------------------------------------------------
 -- PRIMEIRO GESTOR: crie o usuário em Authentication > Users e depois rode
 -- (troque o e-mail):

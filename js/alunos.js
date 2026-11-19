@@ -2,8 +2,9 @@
 import { sb, ok, chamarCriarUsuario } from './supabase.js';
 import {
   esc, money, fmtDate, fmtMes, planoLabel, PLANOS, hojeISO, diasEntre, primeiroDiaMes, abrirModal, toast,
-  confirmar, comBotao, carregando, vazio, erroBox, mostrarCredenciais, linkWhatsAppPara, ICONE_WHATSAPP,
+  confirmar, comBotao, carregando, vazio, erroBox, mostrarCredenciais, linkWhatsAppPara, ICONE_WHATSAPP, linkCobrancaWhatsApp,
   nomeParticipante, camposParticipante, ligarParticipante, lerParticipante,
+  VINCULOS, vinculoPreco, precoVinculo, moneyOuIsento, camposVinculo,
 } from './ui.js';
 import { registrarPagamento } from './financeiro.js';
 import { avatarHTML, ativarFotos, salvarFoto } from './fotos.js';
@@ -282,6 +283,7 @@ export function editarAluno(aluno, aoSalvar) {
           <label class="campo"><span>E-mail</span><input type="email" name="email" maxlength="120" inputmode="email" autocapitalize="none" value="${esc(a.email)}"><small>É o login do aluno no app. Se trocar, o acesso atual é desligado e será preciso usar “Criar acesso ao app” na ficha.</small></label>
         </div>
         ${camposParticipante(a)}
+        ${camposVinculo(a.vinculo || 'externo', { gestor: true })}
         <label class="campo"><span>Endereço</span><input type="text" name="endereco" maxlength="200" value="${esc(a.endereco)}"></label>
         <label class="campo"><span>Observações</span><textarea name="observacoes" maxlength="800">${esc(a.observacoes)}</textarea></label>
         <div id="a-erro"></div>
@@ -312,9 +314,15 @@ export function editarAluno(aluno, aoSalvar) {
     };
     await comBotao(form.querySelector('[type=submit]'), async () => {
       try {
-        const salvo = novo
+        let salvo = novo
           ? ok(await sb.from('alunos').insert(dados).select().single())
           : ok(await sb.from('alunos').update(dados).eq('id', a.id).select().single());
+        // vínculo (ou quem faz as aulas) mudou: grava pela função, que também recalcula as cobranças pendentes
+        const vinculo = form.querySelector('[name=vinculo]:checked')?.value || 'externo';
+        if (vinculo !== (salvo.vinculo || 'externo') || (!novo && part.proprio !== (a.participante_proprio !== false))) {
+          ok(await sb.rpc('definir_vinculo', { p_aluno: salvo.id, p_vinculo: vinculo }));
+          salvo = { ...salvo, vinculo, vinculo_declarado: vinculo };
+        }
         toast(novo ? 'Aluno cadastrado.' : 'Dados atualizados.');
         m.fechar();
         aoSalvar?.(salvo);
@@ -330,7 +338,7 @@ export async function renderFicha(el, id, { navegar }) {
   try {
     aluno = ok(await sb.from('alunos').select('*').eq('id', id).maybeSingle());
     if (!aluno) { el.innerHTML = `<a class="voltar" href="#/alunos">← Alunos</a>${erroBox('Aluno não encontrado.')}`; return; }
-    mats = ok(await sb.from('matriculas').select('*, aulas(id,nome), turmas(id,nome), trancamentos(id,mes)')
+    mats = ok(await sb.from('matriculas').select('*, aulas(id,nome), turmas(id,nome), trancamentos(id,mes), trancamento_pedidos(id,mes,status,created_at)')
       .eq('aluno_id', id).order('created_at', { ascending: false }));
     pags = ok(await sb.from('pagamentos').select('*, matriculas(aulas(nome))')
       .eq('aluno_id', id).order('vencimento', { ascending: false }));
@@ -365,6 +373,7 @@ export async function renderFicha(el, id, { navegar }) {
   } catch (e) { el.innerHTML = `<a class="voltar" href="#/alunos">← Alunos</a>${erroBox(e)}`; return; }
 
   const recarregar = () => renderFicha(el, id, { navegar });
+  const pedidosTranc = mats.flatMap((m) => (m.trancamento_pedidos || []).filter((p) => p.status === 'pendente').map((p) => ({ p, m })));
   const hoje = hojeISO();
   const s = situacao(mats);
   const dado = (rotulo, valor) => `<div><dt>${rotulo}</dt><dd>${valor ? esc(valor) : '—'}</dd></div>`;
@@ -380,7 +389,7 @@ export async function renderFicha(el, id, { navegar }) {
           <label class="link-foto no-print"><input type="file" accept="image/*" id="trocar-foto" hidden>${aluno.foto ? 'Trocar foto' : 'Adicionar foto'}</label>
         </div>
         <div>
-        <h1>${esc(aluno.nome)} <span class="badge ${aluno.ativo ? 'ok' : 'cinza'}" style="vertical-align:middle">${aluno.ativo ? 'Ativo' : 'Desativado'}</span></h1>
+        <h1>${esc(aluno.nome)} <span class="badge ${aluno.ativo ? 'ok' : 'cinza'}" style="vertical-align:middle">${aluno.ativo ? 'Ativo' : 'Desativado'}</span>${aluno.vinculo && aluno.vinculo !== 'externo' ? ` <span class="badge info" style="vertical-align:middle">${VINCULOS[aluno.vinculo].nome}${vinculoPreco(aluno) === 'externo' ? ' · dependente paga preço normal' : ''}</span>` : ''}</h1>
         ${nomeParticipante(aluno) !== aluno.nome ? `<p class="participante-linha">Faz as aulas: <strong>${esc(nomeParticipante(aluno))}</strong> · ${esc(aluno.nome)} é o(a) responsável</p>` : ''}
         <p class="sub"><span class="badge ${s.cls}">${s.txt}</span> · cliente desde ${fmtDate((aluno.created_at || '').slice(0, 10))} · total pago ${money(totalPago)}
           · ${aluno.user_id && aluno.cadastro_completo === false ? '<span class="badge alerta">Aguardando 1º acesso do aluno</span>' : aluno.user_id ? '<span class="badge ok">Acesso ao app ativo</span>' : aluno.email ? '<span class="badge cinza">Ainda não acessou o app</span>' : '<span class="badge alerta">Sem e-mail: cadastre um para liberar o app</span>'}</p>
@@ -410,6 +419,21 @@ export async function renderFicha(el, id, { navegar }) {
         </li>`).join('')}</ul>
     </section>` : ''}
 
+    ${pedidosTranc.length ? `
+    <section class="card pedidos no-print">
+      <h2>Pedidos de trancamento <span class="badge alerta">${pedidosTranc.length}</span></h2>
+      <p class="sub" style="margin-top:-6px">Ao aprovar, o mês fica trancado e o plano ganha 1 mês no final.</p>
+      <ul class="lista-equipe">${pedidosTranc.map(({ p, m }) => `
+        <li>
+          <div><strong>${esc(m.aulas?.nome)}</strong> · trancar <strong>${fmtMes(p.mes)}</strong>
+            <small>pedido em ${fmtDate(p.created_at.slice(0, 10))} · plano ${planoLabel(m.plano)} pago até ${fmtDate(m.data_fim)} → passa a ${fmtDate(maisUmMes(m.data_fim))}</small></div>
+          <div class="acoes-linha">
+            <button class="btn sec perigo pequeno" type="button" data-tranc-resp="nao" data-id="${p.id}">Recusar</button>
+            <button class="btn pequeno" type="button" data-tranc-resp="sim" data-id="${p.id}">Aprovar</button>
+          </div>
+        </li>`).join('')}</ul>
+    </section>` : ''}
+
     <section class="card">
       <h2>Dados pessoais</h2>
       <dl class="dados">
@@ -418,7 +442,9 @@ export async function renderFicha(el, id, { navegar }) {
         ${dado('Quem faz as aulas', aluno.participante_proprio === false
           ? `${nomeParticipante(aluno)}${aluno.participante_nascimento ? ` (nasc. ${fmtDate(aluno.participante_nascimento)})` : ''}`
           : 'O próprio responsável')}
-        ${aluno.responsavel ? dado('Responsável (cadastro antigo)', aluno.responsavel) : ''}${dado('Endereço', aluno.endereco)}
+        ${aluno.responsavel ? dado('Responsável (cadastro antigo)', aluno.responsavel) : ''}
+        <div><dt>Vínculo com o Cevisa</dt><dd>${vinculoHTML(aluno)}</dd></div>
+        <div><dt>Termo de privacidade (LGPD)</dt><dd>${aluno.termo_aceito_em ? `<span class="badge ok">Aceito</span> em ${fmtDate(aluno.termo_aceito_em.slice(0, 10))}${aluno.termo_versao ? ` · versão ${esc(aluno.termo_versao)}` : ''}` : aluno.user_id ? '<span class="badge alerta">Pendente</span> será pedido no próximo acesso' : '<span class="badge cinza">Sem acesso ao app</span> colher a autorização em papel'}</dd></div>${dado('Endereço', aluno.endereco)}
         ${dado('Observações', aluno.observacoes)}
       </dl>
     </section>
@@ -453,7 +479,7 @@ export async function renderFicha(el, id, { navegar }) {
             <td class="num">${money(p.valor)}</td><td>${fmtDate(p.vencimento)}</td>
             <td><span class="badge ${p.status === 'pago' ? 'ok' : atraso ? 'erro' : 'alerta'}">${p.status === 'pago' ? 'Pago' : atraso ? 'Em atraso' : 'Pendente'}</span></td>
             <td>${fmtDate(p.pago_em)}</td><td>${esc(p.forma || '—')}</td>
-            <td class="num">${p.status === 'pendente' ? `<button class="btn pequeno" type="button" data-pagar="${p.id}">Registrar pagamento</button>` : ''}</td></tr>`;
+            <td class="num acoes-cobranca">${(() => { const z = p.status === 'pendente' && linkCobrancaWhatsApp({ valor: p.valor, vencimento: p.vencimento, aula: p.matriculas?.aulas?.nome }, aluno); return z ? `<a class="btn pequeno whats" href="${esc(z)}" target="_blank" rel="noopener" title="Enviar a cobrança pelo WhatsApp">${ICONE_WHATSAPP}Cobrar</a> ` : ''; })()}${p.status === 'pendente' ? `<button class="btn pequeno" type="button" data-pagar="${p.id}">Registrar pagamento</button>` : ''}</td></tr>`;
         }).join('')}</tbody></table></div>` : vazio('Nenhum pagamento gerado ainda.')}
     </section>
 
@@ -472,6 +498,37 @@ export async function renderFicha(el, id, { navegar }) {
   });
   el.querySelector('#excluir').onclick =() => excluirAluno(aluno, mats, () => navegar('#/alunos'));
   el.querySelector('#editar').onclick = () => editarAluno(aluno, recarregar);
+  el.querySelectorAll('[data-tranc-resp]').forEach((b) => {
+    b.onclick = async () => {
+      const aprovar = b.dataset.trancResp === 'sim';
+      if (!aprovar && !(await confirmar('Recusar este pedido de trancamento? O aluno vê no app que não foi aprovado.', { titulo: 'Recusar trancamento', confirmarTexto: 'Recusar', perigo: true }))) return;
+      await comBotao(b, async () => {
+        try {
+          ok(await sb.rpc('responder_trancamento', { p_pedido: b.dataset.id, p_aprovar: aprovar }));
+          toast(aprovar ? 'Trancamento aprovado. O plano ganhou 1 mês no final.' : 'Pedido de trancamento recusado.');
+          recarregar();
+        } catch (err) { toast(err.message, 'erro'); }
+      });
+    };
+  });
+  el.querySelectorAll('[data-vinculo]').forEach((b) => {
+    b.onclick = async () => {
+      const v = b.dataset.vinculo;
+      const dep = aluno.participante_proprio === false;
+      const efeito = v === 'funcionario' ? 'as aulas ficam sem custo (as cobranças pendentes são zeradas e quitadas)'
+        : v === 'prestador' ? `o plano mensal passa a custar ${money(100)} (as cobranças pendentes são recalculadas)`
+        : 'volta o preço normal (as cobranças pendentes são recalculadas)';
+      const msg = `Definir ${aluno.nome} como ${VINCULOS[v].nome.toLowerCase()}? ${dep ? 'Como as aulas são de um dependente, o preço continua o normal.' : `A partir de agora ${efeito}.`}`;
+      if (!(await confirmar(msg, { titulo: 'Vínculo com o Cevisa', confirmarTexto: 'Confirmar' }))) return;
+      await comBotao(b, async () => {
+        try {
+          ok(await sb.rpc('definir_vinculo', { p_aluno: aluno.id, p_vinculo: v }));
+          toast(`Vínculo definido: ${VINCULOS[v].nome}.`);
+          recarregar();
+        } catch (err) { toast(err.message, 'erro'); }
+      });
+    };
+  });
   ativarFotos(el);
   el.querySelector('#trocar-foto').addEventListener('change', async (e) => {
     const f = e.target.files?.[0];
@@ -621,7 +678,8 @@ async function inscrever(aluno, mats, aoConcluir, preset = {}) {
   const livres = aulas.filter((a) => !jaEm.has(a.id));
   if (!livres.length) { m.el.innerHTML = vazio('Este aluno já está inscrito (ou na fila) em todas as aulas disponíveis.'); return; }
 
-  const preco = (a, p) => a[`preco_${p}`];
+  // preço conforme o vínculo confirmado (a cobrança é gerada com esse valor; dependente = preço normal)
+  const preco = (a, p) => precoVinculo(a[`preco_${p}`], p, vinculoPreco(aluno));
   m.el.innerHTML = `
     <form id="f-insc" novalidate>
       <label class="campo"><span>Aula</span>
@@ -673,7 +731,7 @@ async function inscrever(aluno, mats, aoConcluir, preset = {}) {
     m.el.querySelector('#planos').innerHTML = Object.keys(PLANOS).map((p) => `
       <label class="check" style="margin:0;border:1.5px solid var(--borda);border-radius:10px;padding:10px 12px;font-weight:600">
         <input type="radio" name="plano" value="${p}" ${p === marcado ? 'checked' : ''}>
-        ${PLANOS[p]} <span style="margin-left:auto;font-weight:700;color:var(--azul)">${preco(a, p) === null ? 'sem preço' : money(preco(a, p))}</span>
+        ${PLANOS[p]} <span style="margin-left:auto;font-weight:700;color:var(--azul)">${preco(a, p) === null ? 'sem preço' : moneyOuIsento(preco(a, p))}</span>
       </label>`).join('');
     const o = grupo(a, form.turma?.value || null);
     const cheia = o.ativa >= o.vagas || o.espera > 0;
@@ -749,6 +807,13 @@ async function trocarTurma(mat, turmas, aoConcluir) {
 }
 
 // ================================================================== TRANCAR
+// + 1 mês, como no banco (31/01 -> 28/02)
+function maisUmMes(iso) {
+  const [y, mm, d] = iso.split('-').map(Number);
+  const ultimo = new Date(Date.UTC(y, mm + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(y, mm, Math.min(d, ultimo))).toISOString().slice(0, 10);
+}
+
 function trancarMes(mat, aoConcluir) {
   const trancados = new Set((mat.trancamentos || []).map((t) => t.mes));
   const opcoes = [];
@@ -790,4 +855,17 @@ function trancarMes(mat, aoConcluir) {
       } catch (err) { m.el.querySelector('#t-erro').innerHTML = `<div class="aviso erro">${esc(err.message)}</div>`; }
     });
   });
+}
+
+/** Linha "Vínculo com o Cevisa" da ficha: confirmado, informado pelo aluno (a confirmar) e botões para mudar. */
+function vinculoHTML(aluno) {
+  const atual = aluno.vinculo || 'externo';
+  const declarado = aluno.vinculo_declarado;
+  const pendente = declarado && declarado !== atual;
+  const outros = Object.keys(VINCULOS).filter((v) => v !== atual && v !== (pendente ? declarado : null));
+  const dep = aluno.participante_proprio === false && atual !== 'externo' ? ' <small class="sub">(aulas de dependente: preço normal)</small>' : '';
+  return `<strong>${VINCULOS[atual].nome}</strong> <small class="sub">— ${VINCULOS[atual].regra}</small>${dep}
+    ${pendente ? `<br><span class="badge alerta">Informou no cadastro: ${VINCULOS[declarado].nome}</span>
+      <button class="btn pequeno no-print" type="button" data-vinculo="${declarado}">Confirmar ${VINCULOS[declarado].nome.toLowerCase()}</button>` : ''}
+    <span class="vinculo-acoes no-print">${outros.map((v) => `<button class="link-btn" type="button" data-vinculo="${v}">marcar como ${VINCULOS[v].nome.toLowerCase()}</button>`).join(' · ')}</span>`;
 }

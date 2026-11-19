@@ -246,6 +246,9 @@ td.num, th.num { text-align: right; white-space: nowrap; }
 .preco.diaria small { display: none; }
 .btn.largo { width: 100%; }
 .btn.whats { background: #13843f; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+.acoes-cobranca { white-space: nowrap; }
+.acoes-cobranca .btn { vertical-align: middle; }
+.btn.pequeno.whats svg { width: 16px; height: 16px; }
 .btn.whats:hover { background: #0f6e34; }
 .btn.whats svg { width: 20px; height: 20px; flex: none; }
 .precos-obs { margin: 6px 0 0; font-size: 12.5px; color: var(--suave); }
@@ -346,6 +349,38 @@ button.avatar:hover { box-shadow: 0 0 0 2px var(--azul-claro, #4bb8e0); }
 .campo-foto-botao { margin-top: 4px; cursor: pointer; }
 @media (max-width: 560px) { .ficha-cabeca { gap: 12px; } }
 
+/* ------------------------------------------------------------ termo LGPD */
+.aceite-termo { display: flex; gap: 10px; align-items: flex-start; font-weight: 500; font-size: 14px; line-height: 1.45; margin: 4px 0 14px; padding: 12px 14px; border-radius: 12px; background: var(--azul-fundo, #eef6fb); }
+.aceite-termo input { margin-top: 3px; flex: none; width: 20px; height: 20px; }
+.aceite-termo a { color: var(--azul); font-weight: 700; }
+.termo-texto { font-size: 14.5px; line-height: 1.55; }
+.termo-texto h3 { font-size: 15px; margin: 16px 0 4px; color: var(--azul); }
+.termo-texto ul { padding-left: 20px; margin: 4px 0; }
+.termo-texto p { margin: 4px 0; }
+
+/* ------------------------------------------------------------ funcionário (50%) */
+.aviso.ok { background: var(--ok-fundo); color: var(--ok); }
+.badge.info { background: var(--azul-fundo); color: var(--azul-esc); }
+.preco s { display: block; color: var(--suave); font-size: 11.5px; line-height: 1.1; }
+.link-btn { background: none; border: 0; padding: 0 2px; color: var(--azul); text-decoration: underline; cursor: pointer; font: inherit; font-size: 13px; }
+fieldset.vinculo { border: 0; padding: 0; margin: 4px 0 14px; display: grid; gap: 8px; }
+fieldset.vinculo legend { font-weight: 600; font-size: 14px; margin-bottom: 6px; padding: 0; }
+.vinculo-opcao { margin: 0; align-items: flex-start; border: 1.5px solid var(--borda); border-radius: 10px; padding: 10px 12px; font-weight: 500; cursor: pointer; }
+.vinculo-opcao input { margin-top: 3px; flex: none; }
+.vinculo-opcao small { display: block; color: var(--suave); font-size: 13px; margin-top: 1px; }
+.vinculo-opcao:has(input:checked) { border-color: var(--azul); background: var(--azul-fundo); }
+.vinculo-obs { margin: 2px 0 0; color: var(--suave); font-size: 13px; line-height: 1.45; }
+.vinculo-acoes { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-left: 4px; }
+
+/* ------------------------------------------------------------ trancamento pedido pelo aluno */
+.tranc-aviso { margin: 10px 0 0; font-size: 13.5px; }
+.tranc-btn { margin-top: 10px; }
+.tranc-opcao { border: 2px solid var(--azul); border-radius: 12px; padding: 14px; text-align: center; background: var(--azul-fundo); }
+.tranc-opcao span { display: block; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--suave); }
+.tranc-opcao strong { display: block; font-size: 22px; color: var(--azul); }
+.tranc-opcao strong::first-letter { text-transform: uppercase; }
+.tranc-regras { margin: 14px 0 6px; padding-left: 20px; display: grid; gap: 6px; font-size: 14.5px; }
+
 /* ------------------------------------------------------------ Pix */
 .btn.pix { background: #32bcad; color: #06352f; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .btn.pix:hover { background: #27a597; }
@@ -357,6 +392,15 @@ button.avatar:hover { box-shadow: 0 0 0 2px var(--azul-claro, #4bb8e0); }
 .pix-valor small, .pix-chave small { color: var(--suave); }
 .pix-chave { border: 2px dashed #32bcad; border-radius: 12px; padding: 12px; text-align: center; margin-bottom: 12px; background: #effaf8; }
 .pix-chave strong { display: block; font-size: 22px; letter-spacing: .02em; color: var(--texto); user-select: all; word-break: break-all; }
+.pix-dica { text-align: center; font-size: 13.5px; color: var(--suave); margin: 6px 0 10px; }
+.pix-qr-caixa { border: 1px solid var(--borda); border-radius: 12px; padding: 8px 12px; margin-bottom: 4px; }
+.pix-qr-caixa summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--azul); }
+.pix-qr { display: flex; justify-content: center; padding: 10px 0 4px; }
+.pix-qr svg { width: 220px; max-width: 100%; height: auto; }
+.pix-ou { display: flex; align-items: center; gap: 10px; color: var(--suave); font-size: 12.5px; margin: 14px 0 10px; }
+.pix-ou::before, .pix-ou::after { content: ""; flex: 1; height: 1px; background: var(--borda); }
+.btn.sec.copiado { border-color: var(--ok); color: var(--ok); }
+.pix-codigo { font-family: monospace; font-size: 11px; word-break: break-all; background: #f4f6f8; padding: 8px; border-radius: 8px; user-select: all; }
 .pix-passos { margin: 16px 0 4px; padding-left: 20px; display: grid; gap: 6px; font-size: 14.5px; }
 
 /* ------------------------------------------------------------ zona de perigo */

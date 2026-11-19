@@ -2,9 +2,11 @@
 import { sb, ok, chamarFuncao } from './supabase.js';
 import * as config from './config.js';
 import { avatarHTML, ativarFotos } from './fotos.js';
+import { codigoPix, qrSVG } from './pix.js';
 import {
   esc, money, fmtDate, planoLabel, PLANOS, hojeISO, diasEntre, abrirModal, toast, comBotao, carregando, vazio, erroBox,
-  horariosHTML,
+  fmtMes, fmtMesLongo, primeiroDiaMes,
+  horariosHTML, precoVinculo, moneyOuIsento, VINCULOS,
 } from './ui.js';
 
 // Nome de quem faz as aulas (dependente) ou, se for o próprio responsável, o nome do cadastro.
@@ -33,7 +35,7 @@ export async function renderPainelAluno(el) {
       itens.push({ matricula: m.id, aluno: a.nome, aula: m.aula, plano: m.plano, valor, venc });
     }
   }
-  const aPagar = itens.filter((i) => diasEntre(hoje, i.venc) <= DIAS_A_VISTA);
+  const aPagar = itens.filter((i) => i.valor !== 0 && diasEntre(hoje, i.venc) <= DIAS_A_VISTA); // valor zero (funcionário) não é cobrado
   const total = aPagar.reduce((t, i) => t + (i.valor || 0), 0);
   const vencimento = aPagar.map((i) => i.venc).sort()[0] || null;
   const proximo = itens.map((i) => i.venc).sort()[0] || null;
@@ -100,6 +102,12 @@ export async function renderPainelAluno(el) {
 
   el.querySelector('#ja-paguei').onclick = () => informarPagamento({ total, vencimento: vencimento || proximo, aPagar }, () => renderPainelAluno(el));
   ativarFotos(el);
+  el.querySelector('.minhas-aulas')?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-trancar]');
+    if (!b) return;
+    const mat = alunos.flatMap((a) => a.matriculas).find((x) => x.id === b.dataset.trancar);
+    if (mat) pedirTrancamento(mat, () => renderPainelAluno(el));
+  });
   el.querySelector('#comprovante').onclick = () => enviarComprovante(alunos);
   el.querySelector('#pagar-pix')?.addEventListener('click', () => pagarComPix({ total: aPagar.length ? total : null, vencimento }, () => enviarComprovante(alunos)));
 }
@@ -107,22 +115,34 @@ export async function renderPainelAluno(el) {
 // ------------------------------------------------------------------ Pix
 const ICONE_PIX = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5 21.5 12 12 21.5 2.5 12z"/><path d="M7.5 7.5 12 12l4.5-4.5M7.5 16.5 12 12l4.5 4.5"/></svg>';
 
-/** Janela com a chave Pix, o valor a pagar, o botão de copiar e o passo a passo. */
+/** Janela de pagamento: QR Code e Pix copia e cola com o valor já preenchido, e a chave como alternativa. */
 function pagarComPix({ total, vencimento }, abrirComprovante) {
+  const codigo = total ? codigoPix({ valor: total, descricao: 'Mensalidade CEVISA' }) : null;
   const m = abrirModal({
     titulo: 'Pagar com Pix',
     largura: 440,
     corpo: `
       ${total ? `<div class="pix-valor"><span>Valor a pagar</span><strong>${money(total)}</strong>${vencimento ? `<small>vencimento ${fmtDate(vencimento)}</small>` : ''}</div>` : ''}
+      ${codigo ? `
+        <button class="btn pix largo" type="button" data-copiar="codigo">${ICONE_PIX}Copiar código Pix (copia e cola)</button>
+        <p class="pix-dica">O valor de <strong>${money(total)}</strong> já vem preenchido. É só colar no app do banco e confirmar.</p>
+        <details class="pix-qr-caixa">
+          <summary>Pagar lendo o QR Code (de outro celular ou do computador)</summary>
+          <div class="pix-qr" data-qr><small class="sub">Gerando QR Code…</small></div>
+        </details>
+        <div class="pix-ou"><span>ou pague pela chave</span></div>` : ''}
       <div class="pix-chave">
         <span>Chave Pix (${esc(config.PIX_TIPO || 'chave')})</span>
         <strong>${esc(config.PIX_EXIBICAO || config.PIX_CHAVE)}</strong>
         <small>Spa Médico Adventista Cevisa</small>
       </div>
-      <button class="btn pix largo" type="button" data-copiar>${ICONE_PIX}Copiar chave Pix</button>
+      <button class="btn ${codigo ? 'sec' : 'pix'} largo" type="button" data-copiar="chave">${codigo ? '' : ICONE_PIX}Copiar chave Pix</button>
       <ol class="pix-passos">
-        <li>Abra o app do seu banco e escolha <strong>Pix → Pagar com chave</strong>${config.PIX_TIPO ? ` (${esc(config.PIX_TIPO)})` : ''}.</li>
-        <li>Cole a chave${total ? ` e informe o valor de <strong>${money(total)}</strong>` : ''}. Confira o nome do recebedor antes de confirmar.</li>
+        ${codigo
+          ? `<li>Toque em <strong>Copiar código Pix</strong>.</li>
+             <li>No app do banco, escolha <strong>Pix → Pix copia e cola</strong>, cole e confira o nome do recebedor antes de confirmar.</li>`
+          : `<li>Abra o app do seu banco e escolha <strong>Pix → Pagar com chave</strong>${config.PIX_TIPO ? ` (${esc(config.PIX_TIPO)})` : ''}.</li>
+             <li>Cole a chave e informe o valor. Confira o nome do recebedor antes de confirmar.</li>`}
         <li>Depois de pagar, envie o comprovante por aqui. A recepção confere e dá baixa.</li>
       </ol>
       <div class="acoes">
@@ -130,23 +150,41 @@ function pagarComPix({ total, vencimento }, abrirComprovante) {
         <button class="btn" type="button" data-comprovante>Já paguei: enviar comprovante</button>
       </div>`,
   });
-  const copiar = m.el.querySelector('[data-copiar]');
-  copiar.onclick = async () => {
-    try {
-      await navigator.clipboard.writeText(config.PIX_CHAVE);
-    } catch {
-      // navegador sem permissão de área de transferência: seleciona o texto para copiar à mão
-      const sel = window.getSelection();
-      const r = document.createRange();
-      r.selectNodeContents(m.el.querySelector('.pix-chave strong'));
-      sel.removeAllRanges(); sel.addRange(r);
-      toast('Toque e segure a chave selecionada para copiar.', 'erro');
-      return;
-    }
-    copiar.innerHTML = `${ICONE_PIX}Chave copiada ✓`;
-    copiar.classList.add('copiado');
-    toast('Chave Pix copiada! Agora cole no app do seu banco.');
-  };
+
+  if (codigo) {
+    // o QR só é desenhado quando o aluno abre a seção
+    m.el.querySelector('.pix-qr-caixa').addEventListener('toggle', async (e) => {
+      const caixa = m.el.querySelector('[data-qr]');
+      if (!e.target.open || caixa.dataset.ok) return;
+      try { caixa.innerHTML = await qrSVG(codigo); caixa.dataset.ok = '1'; }
+      catch { caixa.innerHTML = '<small class="sub">Não foi possível gerar o QR Code. Use o “copia e cola”.</small>'; }
+    });
+  }
+
+  m.el.querySelectorAll('[data-copiar]').forEach((botao) => {
+    botao.onclick = async () => {
+      const ehCodigo = botao.dataset.copiar === 'codigo';
+      const texto = ehCodigo ? codigo : config.PIX_CHAVE;
+      try {
+        await navigator.clipboard.writeText(texto);
+      } catch {
+        // navegador sem permissão de área de transferência: mostra o texto selecionado para copiar à mão
+        const r = document.createRange();
+        let alvo = m.el.querySelector('.pix-chave strong');
+        if (ehCodigo) {
+          alvo = m.el.querySelector('.pix-codigo') || botao.insertAdjacentElement('afterend', Object.assign(document.createElement('p'), { className: 'pix-codigo', textContent: codigo }));
+        }
+        r.selectNodeContents(alvo);
+        const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+        toast('Toque e segure o texto selecionado para copiar.', 'erro');
+        return;
+      }
+      m.el.querySelectorAll('[data-copiar]').forEach((b) => b.classList.remove('copiado'));
+      botao.innerHTML = `${botao.classList.contains('pix') ? ICONE_PIX : ''}${ehCodigo ? 'Código copiado ✓' : 'Chave copiada ✓'}`;
+      botao.classList.add('copiado');
+      toast(ehCodigo ? 'Código Pix copiado! Agora cole em “Pix copia e cola” no app do banco.' : 'Chave Pix copiada! Agora cole no app do seu banco.');
+    };
+  });
   m.el.querySelector('[data-fechar-pix]').onclick = () => m.fechar();
   m.el.querySelector('[data-comprovante]').onclick = () => { m.fechar(); abrirComprovante(); };
 }
@@ -241,11 +279,80 @@ function cartaoAula(aluno, m, item, varios, hoje) {
       ${horariosHTML(m.horarios) || '<p class="sub" style="margin:0">Horários a confirmar com a recepção.</p>'}
       <dl class="linhas">
         ${espera ? '<div><dt>Situação</dt><dd>Aguardando vaga</dd></div>' : `
-          <div><dt>Valor do plano</dt><dd>${m.preco === null ? 'a combinar' : money(m.preco)}</dd></div>
+          <div><dt>Valor do plano</dt><dd>${m.preco === null ? 'a combinar' : moneyOuIsento(m.preco)}</dd></div>
           ${item?.valor !== null && item && Number(item.valor) !== Number(m.preco) ? `<div><dt>Próxima cobrança</dt><dd>${money(item.valor)}</dd></div>` : ''}
-          <div><dt>Pago até</dt><dd>${pagoAte}</dd></div>`}
+          <div><dt>Pago até</dt><dd>${pagoAte}</dd></div>
+          ${m.trancados?.length ? `<div><dt>Meses trancados</dt><dd>${m.trancados.map(fmtMes).join(', ')}</dd></div>` : ''}`}
       </dl>
+      ${trancamentoHTML(m)}
     </article>`;
+}
+
+// ------------------------------------------------------------------ trancamento (aluno pede, equipe aprova)
+const proximoMes = () => primeiroDiaMes(hojeISO(), 1);
+const nomeMes = (iso) => fmtMesLongo(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)));
+
+/** Situação do trancamento no cartão da aula + botão (só semestral/anual ativos). */
+function trancamentoHTML(m) {
+  if (m.status !== 'ativa' || m.plano === 'mensal') return '';
+  const prox = proximoMes();
+  const ped = m.tranc_pedido;
+  if (ped?.status === 'pendente') {
+    return `<div class="aviso info tranc-aviso">Trancamento de <strong>${nomeMes(ped.mes)}</strong> solicitado. Aguardando a recepção aprovar.</div>`;
+  }
+  if ((m.trancados || []).includes(prox)) {
+    return `<div class="aviso ok tranc-aviso">${nomeMes(prox)} está trancado. O mês foi acrescentado ao final do seu plano.</div>`;
+  }
+  return `${ped?.status === 'recusado' && ped.mes === prox ? `<div class="aviso alerta tranc-aviso">O trancamento de ${nomeMes(prox)} não foi aprovado. Em caso de dúvida, fale com a recepção.</div>` : ''}
+    <button class="btn sec pequeno tranc-btn" type="button" data-trancar="${m.id}">Trancar mês</button>`;
+}
+
+/** Janela: o aluno pede para trancar o PRÓXIMO mês (em qualquer dia). Vale só depois da aprovação. */
+function pedirTrancamento(m, aoConcluir) {
+  const prox = proximoMes();
+  // + 1 mês, como no banco (31/01 -> 28/02)
+  const novoFim = (() => {
+    const [y, mm, d] = m.data_fim.split('-').map(Number);
+    const ultimo = new Date(Date.UTC(y, mm + 1, 0)).getUTCDate();
+    const x = new Date(Date.UTC(y, mm, Math.min(d, ultimo)));
+    return x.toISOString().slice(0, 10);
+  })();
+  const dentro = prox < m.data_fim;
+  const j = abrirModal({
+    titulo: `Trancar mês — ${m.aula}`,
+    largura: 460,
+    corpo: dentro ? `
+      <div class="tranc-opcao">
+        <span>Trancar o próximo mês</span>
+        <strong>${nomeMes(prox)}</strong>
+      </div>
+      <ul class="tranc-regras">
+        <li>Você não frequenta as aulas em <strong>${nomeMes(prox)}</strong>.</li>
+        <li>O mês é acrescentado ao final do plano: ele passa a valer até <strong>${fmtDate(novoFim)}</strong>.</li>
+        <li>O pedido vai para a recepção e <strong>só vale depois de aprovado</strong>. Você acompanha a resposta aqui no app.</li>
+      </ul>
+      <div id="tr-erro"></div>
+      <div class="acoes">
+        <button class="btn sec" type="button" data-fechar-tr>Cancelar</button>
+        <button class="btn" type="button" data-pedir-tr>Pedir trancamento</button>
+      </div>` : `
+      <p>O próximo mês (${nomeMes(prox)}) fica fora do período já pago do seu plano (até ${fmtDate(m.data_fim)}), então não dá para trancá-lo. Fale com a recepção.</p>
+      <div class="acoes"><button class="btn" type="button" data-fechar-tr>Entendi</button></div>`,
+  });
+  j.el.querySelector('[data-fechar-tr]').onclick = () => j.fechar();
+  const pedir = j.el.querySelector('[data-pedir-tr]');
+  if (pedir) {
+    pedir.onclick = () => comBotao(pedir, async () => {
+      try {
+        ok(await sb.rpc('solicitar_trancamento', { p_matricula: m.id }));
+        j.fechar();
+        toast('Pedido enviado! A recepção vai analisar o trancamento.');
+        aoConcluir();
+      } catch (err) {
+        j.el.querySelector('#tr-erro').innerHTML = `<div class="aviso erro">${esc(err.message)}</div>`;
+      }
+    });
+  }
 }
 
 // ------------------------------------------------------------------ pedido de inscrição
@@ -257,9 +364,25 @@ function cartaoAula(aluno, m, item, varios, hoje) {
 export function abrirPedidoInscricao(aula, turmas, alunos, aoConcluir) {
   const livres = alunos.filter((al) =>
     !al.matriculas.some((m) => m.aula_id === aula.id) && !al.solicitacoes?.some((s) => s.aula_id === aula.id));
-  const preco = (p) => aula[`preco_${p}`];
-  const meses = { mensal: 1, semestral: 6, anual: 12 };
-  const primeiroComPreco = Object.keys(PLANOS).find((p) => preco(p) !== null && preco(p) !== undefined) || 'mensal';
+  // preço conforme o vínculo de quem vai fazer a aula (funcionário/prestador confirmado; dependente = preço normal)
+  const vinculoDe = (id) => livres.find((al) => al.id === id)?.vinculo || 'externo';
+  const parcelas = { mensal: 1, semestral: 6, anual: 10 }; // máximo de parcelas
+  const planosHTML = (alunoId, marcado) => {
+    const v = vinculoDe(alunoId);
+    const preco = (p) => precoVinculo(aula[`preco_${p}`], p, v);
+    const escolhido = marcado || Object.keys(PLANOS).find((p) => preco(p) !== null) || 'mensal';
+    return Object.keys(PLANOS).map((p) => {
+      const valor = preco(p);
+      const cheio = aula[`preco_${p}`];
+      const diferente = valor !== null && cheio !== null && cheio !== undefined && valor !== Number(cheio);
+      return `
+            <label class="check plano-opcao">
+              <input type="radio" name="plano" value="${p}" ${p === escolhido ? 'checked' : ''}>
+              <span>${PLANOS[p]}${valor && parcelas[p] > 1 ? `<small>até ${parcelas[p]}x ${money(valor / parcelas[p])}</small>` : ''}${diferente ? `<small>preço de ${VINCULOS[v].nome.toLowerCase()} (normal ${money(cheio)})</small>` : ''}</span>
+              <strong>${valor === null ? 'a consultar' : moneyOuIsento(valor)}</strong>
+            </label>`;
+    }).join('');
+  };
   const fila = turmas.length ? turmas.every((t) => t.lotada) : !!aula.lotada;
   const primeiraLivre = turmas.find((t) => fila || !t.lotada);
 
@@ -290,12 +413,7 @@ export function abrirPedidoInscricao(aula, turmas, alunos, aoConcluir) {
           : `<input type="hidden" name="aluno" value="${livres[0]?.id || ''}">`}
         <fieldset style="border:0;padding:0;margin:0 0 14px">
           <legend style="font-weight:600;font-size:14px;margin-bottom:6px">Escolha o plano</legend>
-          <div style="display:grid;gap:8px">${Object.keys(PLANOS).map((p) => `
-            <label class="check plano-opcao">
-              <input type="radio" name="plano" value="${p}" ${p === primeiroComPreco ? 'checked' : ''}>
-              <span>${PLANOS[p]}${preco(p) && meses[p] > 1 ? `<small>${money(preco(p) / meses[p])}/mês</small>` : ''}</span>
-              <strong>${preco(p) === null || preco(p) === undefined ? 'a consultar' : money(preco(p))}</strong>
-            </label>`).join('')}</div>
+          <div id="pd-planos" style="display:grid;gap:8px">${planosHTML(livres[0]?.id)}</div>
         </fieldset>
         <label class="campo"><span>Observação (opcional)</span><textarea name="obs" maxlength="300" placeholder="Ex.: tenho uma lesão no joelho"></textarea></label>
         ${fila ? '' : '<div class="aviso info">A recepção vai receber seu pedido e confirmar a inscrição. Depois disso, o valor aparece no seu painel.</div>'}
@@ -308,6 +426,10 @@ export function abrirPedidoInscricao(aula, turmas, alunos, aoConcluir) {
   });
   const form = m.el.querySelector('#f-pedido');
   m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
+  // com mais de um aluno (responsável e dependente), o preço muda conforme quem vai fazer a aula
+  form.querySelector('select[name=aluno]')?.addEventListener('change', (e) => {
+    m.el.querySelector('#pd-planos').innerHTML = planosHTML(e.target.value, form.querySelector('[name=plano]:checked')?.value);
+  });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const turma = turmas.length ? form.querySelector('[name=turma]:checked')?.value : null;

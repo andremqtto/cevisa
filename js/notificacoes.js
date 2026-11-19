@@ -14,6 +14,8 @@ const ROTULOS = {
   pagamento_informado: 'Pagamento informado',
   inscricao_solicitada: 'Pedido de inscrição',
   comprovante_enviado: 'Comprovante enviado',
+  vinculo_declarado: 'Vínculo a confirmar',
+  trancamento_solicitado: 'Pedido de trancamento',
 };
 // Tipos que também aparecem como banner no topo da tela (o aluno está esperando uma resposta).
 const TIPOS_BANNER = ['pagamento_informado', 'comprovante_enviado'];

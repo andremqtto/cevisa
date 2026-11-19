@@ -12,6 +12,10 @@ export const WHATSAPP_NUMERO = '5519998864617';
 export const PIX_CHAVE = '21636951000202';
 export const PIX_TIPO = 'CNPJ';
 export const PIX_EXIBICAO = '21.636.951/0002-02';
+// Recebedor no QR Code / Pix copia e cola (sem acentos; nome até 25 letras, cidade até 15).
+// O banco do aluno mostra o nome oficial cadastrado na chave; estes campos são exigidos pelo padrão do Pix.
+export const PIX_NOME = 'CEVISA';
+export const PIX_CIDADE = 'ENG COELHO'; // Engenheiro Coelho (abreviado: o campo aceita até 15 letras)
 
 // Endereço público do app (usado no QR Code da aba Alunos).
 export const APP_URL = 'https://cevisa.vercel.app';

@@ -1,7 +1,7 @@
 // Tela inicial: aulas, turmas e preços (pública). Gestores editam tudo aqui.
 import { sb, ok } from './supabase.js';
 import { avatarHTML, ativarFotos } from './fotos.js';
-import { esc, money, abrirModal, toast, confirmar, comBotao, carregando, vazio, erroBox, planoLabel, horariosHTML, nomeParticipante } from './ui.js';
+import { esc, money, abrirModal, toast, confirmar, comBotao, carregando, vazio, erroBox, planoLabel, horariosHTML, nomeParticipante, precoVinculo, moneyOuIsento, PRESTADOR_MENSAL } from './ui.js';
 
 const FOTO_MAX = 5 * 1024 * 1024;
 
@@ -32,7 +32,10 @@ export async function renderHome(el, { isGestor, logado = false }) {
       const r = await sb.rpc('painel_aluno');
       alunos = r.error ? null : r.data;
     }
-    desenhar(el, aulas, { isGestor, logado, alunos, ocupacao, ocTurma, turmasDa });
+    // funcionário/prestador confirmado (e que faz as próprias aulas) vê os preços do seu vínculo
+    const especial = alunos?.find((a) => a.vinculo && a.vinculo !== 'externo') || null;
+    const vinculo = especial?.vinculo || 'externo';
+    desenhar(el, aulas, { isGestor, logado, alunos, ocupacao, ocTurma, turmasDa, vinculo, varios: (alunos?.length || 0) > 1 });
   } catch (e) {
     el.innerHTML = erroBox(e);
   }
@@ -46,6 +49,7 @@ function desenhar(el, aulas, ctx) {
       <h1>Nossas aulas</h1>
       <p class="sub">Conheça as modalidades do Spa Médico Adventista Cevisa e escolha a sua.</p>
     </section>
+    ${avisoVinculo(ctx)}
     ${isGestor ? '<div class="aviso info no-print">Você está logado como gestor: pode editar as aulas, turmas, preços e fotos. As vagas só aparecem para você.</div>' : ''}
     <div class="grade-aulas">
       ${aulas.map((a) => cartao(a, ctx)).join('')}
@@ -71,10 +75,25 @@ function desenhar(el, aulas, ctx) {
   };
 }
 
-function precoBox(rotulo, valor, meses, extra = '') {
-  // semestral: "6x R$ …" (parcelas); anual: equivalente por mês
-  const porMes = !valor || meses <= 1 ? '' : meses === 6 ? `6x ${money(valor / 6)}` : `${money(valor / meses)}/mês`;
-  return `<div class="preco ${extra}"><span>${rotulo}</span><strong>${valor === null || valor === undefined ? 'Consulte' : money(valor)}</strong><small>${porMes}</small></div>`;
+/** Aviso no topo para quem tem preço de funcionário ou prestador. */
+function avisoVinculo(ctx) {
+  if (ctx.vinculo === 'externo') return '';
+  const dep = ctx.varios ? ' Para dependentes valem os preços normais.' : '';
+  return ctx.vinculo === 'funcionario'
+    ? `<div class="aviso ok">Você é <strong>funcionário(a)</strong>: as aulas são <strong>sem custo</strong>. Os valores abaixo já estão com o seu preço.${dep}</div>`
+    : `<div class="aviso ok">Você é <strong>prestador(a)</strong>: o plano mensal de todas as aulas é <strong>${money(PRESTADOR_MENSAL)}</strong>. Os valores abaixo já estão com o seu preço.${dep}</div>`;
+}
+
+// plano: mensal | semestral | anual | diaria. Com vínculo de funcionário/prestador, mostra o valor normal riscado acima.
+function precoBox(rotulo, valorCheio, plano, extra = '', vinculo = 'externo') {
+  const temValor = valorCheio !== null && valorCheio !== undefined;
+  const valor = plano === 'diaria' ? (temValor ? (vinculo === 'funcionario' ? 0 : Number(valorCheio)) : null)
+    : precoVinculo(valorCheio, plano, vinculo);
+  // parcelamento máximo: semestral em 6x, anual em 10x
+  const parcelas = plano === 'semestral' ? 6 : plano === 'anual' ? 10 : 0;
+  const porMes = !valor || !parcelas ? '' : `${parcelas}x ${money(valor / parcelas)}`;
+  const riscado = temValor && valor !== Number(valorCheio) && valorCheio > 0 ? `<s>${money(valorCheio)}</s>` : '';
+  return `<div class="preco ${extra}"><span>${rotulo}</span>${riscado}<strong>${temValor ? moneyOuIsento(valor) : 'Consulte'}</strong><small>${porMes}</small></div>`;
 }
 
 /** Aula sem vaga para novos alunos? (todas as turmas cheias, ou a aula cheia se não tiver turmas) */
@@ -130,10 +149,10 @@ function cartao(a, ctx) {
         ${a.descricao ? `<p>${esc(a.descricao)}</p>` : ''}
         ${turmas.length ? turmasHTML(turmas, ctx) : horariosHTML(a.horarios)}
         <div class="precos">
-          ${precoBox('Mensal', a.preco_mensal, 1)}
-          ${precoBox('Semestral*', a.preco_semestral, 6)}
-          ${precoBox('Anual*', a.preco_anual, 12)}
-          ${precoBox('Diária', a.preco_diaria, 1, 'diaria')}
+          ${precoBox('Mensal', a.preco_mensal, 'mensal', '', ctx.vinculo)}
+          ${precoBox('Semestral*', a.preco_semestral, 'semestral', '', ctx.vinculo)}
+          ${precoBox('Anual*', a.preco_anual, 'anual', '', ctx.vinculo)}
+          ${precoBox('Diária', a.preco_diaria, 'diaria', 'diaria', ctx.vinculo)}
         </div>
         <p class="precos-obs">* Para contratar os planos semestral ou anual, compareça pessoalmente à recepção.</p>
         ${inscricaoAluno(a, turmas, ctx.alunos)}
