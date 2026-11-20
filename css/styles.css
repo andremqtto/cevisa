@@ -672,3 +672,17 @@ body:has(#whats) .assinatura { padding-bottom: 84px; }
   body:has(#whats):has(.nav a) .assinatura { padding-bottom: calc(140px + env(safe-area-inset-bottom)); }
 }
 @media print { .assinatura { display: none; } }
+
+/* Lançar mensalidade (Cobranças) */
+.lm-resultados { display: grid; gap: 6px; margin: -6px 0 12px; }
+.lm-item { text-align: left; background: #fff; border: 1.5px solid var(--borda); border-radius: 10px; padding: 8px 12px; cursor: pointer; }
+.lm-item:hover, .lm-item:focus-visible { border-color: var(--azul); background: var(--azul-fundo); }
+.lm-item small { display: block; color: var(--suave); }
+.lm-item strong + small { display: inline; }
+.lm-meses { border: 1.5px solid var(--borda); border-radius: 10px; padding: 10px 12px; }
+.lm-meses summary { cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.lm-grade { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.lm-mes { margin: 0; border: 1.5px solid var(--borda); border-radius: 10px; padding: 8px 10px; font-weight: 500; cursor: pointer; }
+.lm-mes span:nth-of-type(1) { flex: 1; }
+.lm-mes:has(input:checked:not(:disabled)) { border-color: var(--azul); background: var(--azul-fundo); }
+.lm-mes.pago { opacity: .7; cursor: default; }

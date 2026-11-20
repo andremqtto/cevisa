@@ -702,6 +702,48 @@ begin
    where aluno_id = p.aluno_id and tipo in ('pagamento_informado','comprovante_enviado');
 end $$;
 
+-- "Lançar mensalidade" (aba Cobranças): o aluno do plano mensal paga vários meses de uma vez.
+-- Quita, em sequência, todos os meses desde o próximo em aberto até p_ate (do ano atual):
+-- usa a cobrança pendente, se houver, e cria as demais já pagas. Cada mês estende o "pago até".
+create or replace function public.lancar_mensalidades(p_matricula uuid, p_ate date, p_forma text default null, p_data date default current_date)
+returns int language plpgsql security definer set search_path = public as $$
+declare
+  m public.matriculas; p public.pagamentos;
+  v_ate date := date_trunc('month', p_ate)::date; v_comp date; v_qtd int := 0;
+begin
+  if not public.is_gestor() then raise exception 'Acesso negado.'; end if;
+  select * into m from public.matriculas where id = p_matricula for update;
+  if not found or m.status <> 'ativa' then raise exception 'Matrícula ativa não encontrada.'; end if;
+  if m.plano <> 'mensal' then raise exception 'Lançar mensalidade vale só para o plano mensal.'; end if;
+  if v_ate > make_date(extract(year from current_date)::int, 12, 1) then
+    raise exception 'Só é possível lançar meses do ano atual.';
+  end if;
+  if v_ate < date_trunc('month', m.data_fim)::date then
+    raise exception 'Esses meses já estão pagos (pago até %).', to_char(m.data_fim, 'DD/MM/YYYY');
+  end if;
+  loop
+    select * into m from public.matriculas where id = p_matricula;
+    v_comp := date_trunc('month', m.data_fim)::date;
+    exit when v_comp > v_ate;
+    v_qtd := v_qtd + 1;
+    if v_qtd > 24 then raise exception 'Quantidade de meses inválida.'; end if;
+    select * into p from public.pagamentos
+     where matricula_id = m.id and status = 'pendente' order by vencimento limit 1;
+    if found then
+      perform public.registrar_pagamento(p.id, p_forma, p_data);
+    else
+      insert into public.pagamentos (matricula_id, aluno_id, plano, meses, competencia, valor, vencimento, status, pago_em, forma)
+      values (m.id, m.aluno_id, 'mensal', 1, v_comp,
+              coalesce(public._preco_aluno(m.aluno_id, m.aula_id, 'mensal'), 0),
+              m.data_fim, 'pago', coalesce(p_data, current_date), nullif(trim(p_forma), ''));
+      update public.matriculas set data_fim = (data_fim + interval '1 month')::date where id = m.id;
+    end if;
+  end loop;
+  return v_qtd;
+end $$;
+revoke all on function public.lancar_mensalidades(uuid, date, text, date) from public, anon;
+grant execute on function public.lancar_mensalidades(uuid, date, text, date) to authenticated;
+
 -- Tranca um mês (planos semestral/anual). O mês vai para o final do plano.
 create or replace function public.trancar_mes(p_matricula uuid, p_mes date)
 returns void language plpgsql security definer set search_path = public as $$
