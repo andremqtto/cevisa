@@ -66,20 +66,37 @@ export function iniciarNotificacoes(host, { navegar }) {
     const el = document.createElement('div');
     el.className = 'banner';
     el.dataset.id = n.id;
+    el.dataset.aluno = n.aluno_id || '';
     el.innerHTML = `
       <button class="banner-corpo" type="button">
         <strong>${n.tipo === 'comprovante_enviado' ? 'Comprovante enviado pelo aluno' : 'Pagamento informado pelo aluno'}</strong>
         <span>${esc(n.mensagem)}</span>
-        <small>Toque para abrir o painel do aluno</small>
+        <small>Toque para confirmar o pagamento</small>
       </button>
       <button class="icone-btn banner-fechar" type="button" aria-label="Dispensar aviso">×</button>`;
+    // O banner só some quando o pagamento é confirmado (ou dispensado no ×).
     el.querySelector('.banner-corpo').onclick = () => {
-      el.remove();
-      marcarLida(n.id);
-      if (n.aluno_id) navegar(`#/alunos/${n.aluno_id}`);
+      if (n.aluno_id) abrirConfirmacao(n);
+      else { el.remove(); marcarLida(n.id); }
     };
     el.querySelector('.banner-fechar').onclick = () => { el.remove(); marcarLida(n.id); };
     caixaBanners().appendChild(el);
+  }
+
+  // Janela "Confirmar pagamento" (dá baixa nas mensalidades do aluno de uma vez).
+  async function abrirConfirmacao(n) {
+    const { confirmarPagamentoInformado } = await import('./financeiro.js');
+    confirmarPagamentoInformado({
+      alunoId: n.aluno_id,
+      mensagem: n.mensagem,
+      navegar,
+      aoConcluir: () => {
+        // a confirmação marca como lidos os avisos de pagamento/comprovante deste aluno
+        document.querySelectorAll(`#banners .banner[data-aluno="${n.aluno_id}"]`).forEach((b) => b.remove());
+        atualizarContagem();
+        navegar(location.hash || '#/'); // atualiza a tela atual (cobranças, ficha…)
+      },
+    });
   }
 
   async function buscarBanners() {
@@ -106,7 +123,7 @@ export function iniciarNotificacoes(host, { navegar }) {
         <header><h3>Notificações</h3>
           <button class="btn sec pequeno" type="button" data-todas>Marcar todas como lidas</button></header>
         ${itens.length ? itens.map((n) => `
-          <button class="notif ${n.lida ? '' : 'nova'} ${n.tipo}" type="button" data-id="${n.id}" data-aluno="${n.aluno_id || ''}">
+          <button class="notif ${n.lida ? '' : 'nova'} ${n.tipo}" type="button" data-id="${n.id}" data-aluno="${n.aluno_id || ''}" data-msg="${esc(n.mensagem)}">
             <strong>${ROTULOS[n.tipo] || 'Aviso'}</strong>
             <div>${esc(n.mensagem)}</div>
             <small>${fmtDate(n.created_at)}</small>
@@ -134,6 +151,11 @@ export function iniciarNotificacoes(host, { navegar }) {
     }
     const item = e.target.closest('.notif');
     if (!item) return;
+    // pagamento informado / comprovante ainda não confirmado: abre a confirmação direto
+    if (item.classList.contains('nova') && TIPOS_BANNER.some((t) => item.classList.contains(t)) && item.dataset.aluno) {
+      fechar();
+      return abrirConfirmacao({ aluno_id: item.dataset.aluno, mensagem: item.dataset.msg || '' });
+    }
     document.querySelector(`.banner[data-id="${item.dataset.id}"]`)?.remove();
     fechar();
     marcarLida(item.dataset.id);

@@ -779,6 +779,35 @@ begin
   end loop;
   return v_qtd;
 end $$;
+-- Confirmar o pagamento que o aluno informou ("Já paguei" / comprovante): dá baixa, de uma vez,
+-- na próxima mensalidade de cada aula escolhida. Se a cobrança ainda não foi gerada, gera e quita.
+create or replace function public.confirmar_pagamento_aluno(p_aluno uuid, p_matriculas uuid[], p_forma text default null, p_data date default current_date)
+returns int language plpgsql security definer set search_path = public as $$
+declare v_mat uuid; p public.pagamentos; v_qtd int := 0;
+begin
+  if not public.is_gestor() then raise exception 'Acesso negado.'; end if;
+  if coalesce(array_length(p_matriculas, 1), 0) = 0 then raise exception 'Escolha pelo menos uma aula.'; end if;
+  foreach v_mat in array p_matriculas loop
+    if not exists (select 1 from public.matriculas where id = v_mat and aluno_id = p_aluno and status = 'ativa') then
+      raise exception 'Matrícula não encontrada para este aluno.';
+    end if;
+    select * into p from public.pagamentos where matricula_id = v_mat and status = 'pendente' order by vencimento limit 1;
+    if not found then
+      perform public._criar_cobranca(v_mat);
+      select * into p from public.pagamentos where matricula_id = v_mat and status = 'pendente' order by vencimento limit 1;
+    end if;
+    if found then
+      perform public.registrar_pagamento(p.id, p_forma, p_data);
+      v_qtd := v_qtd + 1;
+    end if;
+  end loop;
+  update public.notificacoes set lida = true
+   where aluno_id = p_aluno and tipo in ('pagamento_informado','comprovante_enviado');
+  return v_qtd;
+end $$;
+revoke all on function public.confirmar_pagamento_aluno(uuid, uuid[], text, date) from public, anon;
+grant execute on function public.confirmar_pagamento_aluno(uuid, uuid[], text, date) to authenticated;
+
 revoke all on function public.lancar_mensalidades(uuid, date, text, date) from public, anon;
 grant execute on function public.lancar_mensalidades(uuid, date, text, date) to authenticated;
 

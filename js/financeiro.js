@@ -3,7 +3,7 @@ import { sb, ok } from './supabase.js';
 import {
   esc, money, fmtDate, fmtMes, planoLabel, hojeISO, diasEntre, abrirModal, toast, confirmar,
   comBotao, carregando, vazio, erroBox, linkCobrancaWhatsApp, ICONE_WHATSAPP,
-  primeiroDiaMes, precoVinculo, vinculoPreco, moneyOuIsento,
+  primeiroDiaMes, precoVinculo, vinculoPreco, moneyOuIsento, nomeParticipante,
 } from './ui.js';
 
 const FORMAS = ['Pix', 'Dinheiro', 'Cartão de débito', 'Cartão de crédito', 'Boleto', 'Transferência'];
@@ -119,6 +119,96 @@ export async function lancarDiaria(aoConcluir) {
         }));
         m.fechar();
         toast(`Diária de ${money(valor)} lançada.`);
+        aoConcluir?.();
+      } catch (err) { erro(err.message); }
+    });
+  });
+}
+
+// ------------------------------------------------------------------ confirmar pagamento informado pelo aluno
+const PRECO_PLANO = { mensal: 'preco_mensal', semestral: 'preco_semestral', anual: 'preco_anual' };
+
+/**
+ * Aberto pela notificação "Pagamento informado" / "Comprovante enviado": lista a próxima mensalidade
+ * de cada aula ativa do aluno (as que vencem em até 30 dias já vêm marcadas) e dá baixa de uma vez.
+ */
+export async function confirmarPagamentoInformado({ alunoId, mensagem = '', navegar, aoConcluir } = {}) {
+  const m = abrirModal({ titulo: 'Confirmar pagamento', largura: 520, corpo: carregando() });
+  let aluno, mats;
+  try {
+    aluno = ok(await sb.from('alunos').select('id,nome,participante_proprio,participante_nome,vinculo').eq('id', alunoId).single());
+    mats = ok(await sb.from('matriculas')
+      .select('id,plano,data_fim,aulas(nome,preco_mensal,preco_semestral,preco_anual),turmas(nome),pagamentos(id,valor,vencimento,status)')
+      .eq('aluno_id', alunoId).eq('status', 'ativa'));
+  } catch (e) { m.el.innerHTML = erroBox(e); return; }
+
+  const hoje = hojeISO();
+  const itens = mats.map((x) => {
+    const pend = (x.pagamentos || []).filter((p) => p.status === 'pendente').sort((a, b) => a.vencimento.localeCompare(b.vencimento))[0];
+    const valor = pend ? Number(pend.valor) : precoVinculo(x.aulas?.[PRECO_PLANO[x.plano]], x.plano, vinculoPreco(aluno));
+    const venc = pend ? pend.vencimento : x.data_fim;
+    return { id: x.id, aula: x.aulas?.nome, turma: x.turmas?.nome, plano: x.plano, valor, venc, gerada: !!pend };
+  }).filter((i) => i.valor !== 0).sort((a, b) => a.venc.localeCompare(b.venc));
+  const formaInformada = (mensagem.match(/Forma: ([^.]+)\./) || [])[1]?.trim();
+  const ficha = () => { m.fechar(); navegar?.(`#/alunos/${alunoId}`); };
+
+  if (!itens.length) {
+    m.el.innerHTML = `
+      <p style="margin:0 0 12px"><strong>${esc(nomeParticipante(aluno))}</strong></p>
+      <div class="aviso info">Este aluno não tem mensalidades em aberto para confirmar.</div>
+      <div class="acoes"><button class="btn sec" type="button" data-ficha>Abrir ficha do aluno</button><button class="btn" type="button" data-ok>Fechar</button></div>`;
+    m.el.querySelector('[data-ficha]').onclick = ficha;
+    m.el.querySelector('[data-ok]').onclick = () => m.fechar();
+    return;
+  }
+
+  m.el.innerHTML = `
+    <p style="margin:0 0 4px"><strong>${esc(nomeParticipante(aluno))}</strong>${nomeParticipante(aluno) !== aluno.nome ? ` <small class="sub">resp.: ${esc(aluno.nome)}</small>` : ''}</p>
+    ${mensagem ? `<p class="sub" style="margin:0 0 12px">${esc(mensagem)}</p>` : ''}
+    <form id="f-confirma" novalidate>
+      <fieldset class="vinculo"><legend>Mensalidades pagas</legend>${itens.map((i) => {
+        const d = diasEntre(hoje, i.venc);
+        return `<label class="check vinculo-opcao"><input type="checkbox" name="mat" value="${i.id}" ${d <= 30 ? 'checked' : ''}>
+          <span><strong>${esc(i.aula)}</strong>${i.turma ? ` — ${esc(i.turma)}` : ''} · ${esc(planoLabel(i.plano))}
+            <small>${i.valor === null ? 'valor a combinar' : money(i.valor)} · vencimento ${fmtDate(i.venc)}${d < 0 ? ' <span class="badge erro">atrasada</span>' : ''}</small></span></label>`;
+      }).join('')}</fieldset>
+      <div class="grade2">
+        <label class="campo"><span>Forma de pagamento</span>
+          <select name="forma">${FORMAS.map((f) => `<option ${f === formaInformada ? 'selected' : ''}>${f}</option>`).join('')}</select></label>
+        <label class="campo"><span>Data do pagamento</span>
+          <input type="date" name="data" value="${hoje}" max="${hoje}"></label>
+      </div>
+      <div id="cp-total"></div>
+      <div id="cp-erro"></div>
+      <div class="acoes">
+        <button class="btn sec" type="button" data-ficha>Abrir ficha</button>
+        <button class="btn" type="submit">Confirmar pagamento</button>
+      </div>
+    </form>`;
+  const form = m.el.querySelector('#f-confirma');
+  const erro = (t) => { m.el.querySelector('#cp-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
+  const marcados = () => [...form.querySelectorAll('[name=mat]:checked')].map((c) => c.value);
+  const total = () => {
+    const sel = itens.filter((i) => marcados().includes(i.id));
+    const soma = sel.reduce((t, i) => t + (i.valor || 0), 0);
+    m.el.querySelector('#cp-total').innerHTML = sel.length ? `<div class="aviso info">Total: <strong>${money(soma)}</strong> (${sel.length} mensalidade${sel.length > 1 ? 's' : ''})</div>` : '';
+  };
+  form.addEventListener('change', total);
+  total();
+  m.el.querySelector('[data-ficha]').onclick = ficha;
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const sel = marcados();
+    if (!sel.length) return erro('Marque pelo menos uma mensalidade.');
+    erro('');
+    await comBotao(form.querySelector('[type=submit]'), async () => {
+      try {
+        const qtd = ok(await sb.rpc('confirmar_pagamento_aluno', {
+          p_aluno: alunoId, p_matriculas: sel, p_forma: form.forma.value, p_data: form.data.value || hoje,
+        }));
+        m.fechar();
+        toast(`Pagamento confirmado: ${qtd} mensalidade${qtd === 1 ? '' : 's'} de ${nomeParticipante(aluno)}.`);
         aoConcluir?.();
       } catch (err) { erro(err.message); }
     });
