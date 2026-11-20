@@ -112,7 +112,7 @@ main { max-width: 1160px; margin: 0 auto; padding: 28px 20px 60px; }
 .campo > span { display: block; font-weight: 600; font-size: 14px; margin-bottom: 4px; }
 .campo small { display: block; color: var(--suave); margin-top: 3px; }
 input[type=text], input[type=email], input[type=password], input[type=tel], input[type=number],
-input[type=date], input[type=month], input[type=search], select, textarea {
+input[type=date], input[type=datetime-local], input[type=month], input[type=search], select, textarea {
   width: 100%; padding: 10px 12px; border: 1.5px solid var(--borda); border-radius: 10px; background: #fff;
 }
 input:focus, select:focus, textarea:focus { border-color: var(--azul-claro); outline: none; box-shadow: 0 0 0 3px rgba(91, 196, 229, .35); }
@@ -542,7 +542,7 @@ body:has(#whats) main { padding-bottom: 110px; }
   .chip button { padding: 6px 10px; }
   .check input { width: 22px; height: 22px; }
   input[type=text], input[type=email], input[type=password], input[type=tel], input[type=number],
-  input[type=date], input[type=month], input[type=search], select, textarea { font-size: 16px; min-height: 44px; } /* 16px evita zoom no iOS */
+  input[type=date], input[type=datetime-local], input[type=month], input[type=search], select, textarea { font-size: 16px; min-height: 44px; } /* 16px evita zoom no iOS */
   .acoes .btn { flex: 1 1 auto; }
 
   /* filtros e abas */
@@ -626,3 +626,49 @@ body:has(#whats) main { padding-bottom: 110px; }
 .link-cadastro-acoes { display: grid; gap: 8px; margin: 0 0 14px; }
 .link-cadastro-acoes .btn { width: 100%; justify-content: center; }
 .campo-robo { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+
+/* Anúncios: lista dos admins */
+.anuncio-item { align-items: flex-start !important; }
+.anuncio-item-corpo { flex: 1; }
+.anuncio-item-titulo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.anuncio-item-texto { margin: 4px 0; white-space: pre-line; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+@media (max-width: 640px) {
+  .anuncio-item { flex-direction: column; }
+  .anuncio-item .acoes-linha { justify-content: flex-start; }
+  .nav:has(a:nth-child(6)) a { font-size: 11.5px; padding: 10px 0; }
+}
+
+/* Anúncios: balão flutuante para alunos e professores */
+.anuncio-balao {
+  position: fixed; z-index: 150; left: 50%; transform: translateX(-50%);
+  bottom: calc(92px + env(safe-area-inset-bottom));
+  width: min(440px, calc(100vw - 32px)); max-height: calc(100vh - 180px); overflow: auto;
+  background: var(--card); color: var(--texto); border: 2px solid var(--azul); border-radius: var(--raio);
+  box-shadow: 0 18px 48px rgba(1, 59, 102, .35); padding: 16px 18px 18px;
+  animation: anuncio-entra .35s ease-out;
+}
+.anuncio-balao.sai { opacity: 0; transform: translate(-50%, 10px); transition: opacity .2s, transform .2s; }
+.anuncio-topo { display: flex; align-items: center; gap: 8px; color: var(--azul); font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 8px; }
+.anuncio-topo svg { flex: none; }
+.anuncio-mais { margin-left: auto; background: var(--azul-fundo); color: var(--azul-esc); border-radius: 999px; padding: 1px 8px; text-transform: none; letter-spacing: 0; }
+.anuncio-balao h3 { font-size: 19px; margin: 0 0 6px; }
+.anuncio-texto { margin: 0 0 14px; white-space: pre-line; overflow-wrap: anywhere; }
+.anuncio-balao .btn { width: 100%; font-variant-numeric: tabular-nums; }
+.anuncio-balao .btn:disabled { cursor: not-allowed; }
+@keyframes anuncio-entra { from { opacity: 0; transform: translate(-50%, 16px); } }
+@media (max-width: 640px) {
+  body:has(.nav a) .anuncio-balao { bottom: calc(140px + env(safe-area-inset-bottom)); max-height: calc(100vh - 220px); }
+}
+@media (prefers-reduced-motion: reduce) { .anuncio-balao { animation: none; } }
+
+/* Marca d'água discreta no fim de todas as telas */
+main#app, body:has(#whats) main#app { padding-bottom: 28px; }
+.assinatura { text-align: center; font-size: 11px; letter-spacing: .03em; color: var(--suave); opacity: .55; padding: 8px 16px 22px; user-select: none; }
+body:has(#whats) .assinatura { padding-bottom: 84px; }
+@media (max-width: 640px) {
+  .topo:has(.nav a) ~ main#app, body:has(#whats) main#app { padding-bottom: 20px; }
+  .topo:has(.nav a) ~ .assinatura { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
+  body:has(#whats) .assinatura { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
+  body:has(#whats):has(.nav a) .assinatura { padding-bottom: calc(140px + env(safe-area-inset-bottom)); }
+}
+@media print { .assinatura { display: none; } }

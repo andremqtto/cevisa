@@ -1498,6 +1498,100 @@ create policy aulas_fotos_gestor on storage.objects for all to authenticated
   with check (bucket_id = 'aulas' and public.is_gestor());
 
 -- ---------------------------------------------------------------------
+-- Anúncios (aba "Anúncios" dos admins). Aparecem como balão para alunos e professores,
+-- que confirmam com "Entendi". Podem ser programados (início no futuro), repetir
+-- (todo dia / semana / mês, no mesmo horário do início) e ter data de expiração:
+-- a partir de 00:00 do dia em "expira_em" (horário de Brasília) o anúncio some.
+-- ---------------------------------------------------------------------
+create table if not exists public.anuncios (
+  id          uuid primary key default gen_random_uuid(),
+  titulo      text check (titulo is null or length(titulo) <= 120),
+  mensagem    text not null check (length(btrim(mensagem)) between 1 and 2000),
+  inicio      timestamptz not null default now(),
+  recorrencia text not null default 'unica' check (recorrencia in ('unica','diaria','semanal','mensal')),
+  expira_em   date,
+  ativo       boolean not null default true,   -- false = pausado
+  criado_por  uuid default auth.uid() references auth.users(id) on delete set null,
+  created_at  timestamptz not null default now()
+);
+
+-- Quem já clicou em "Entendi" (por ocorrência: um anúncio diário volta no dia seguinte).
+create table if not exists public.anuncios_vistos (
+  anuncio_id uuid not null references public.anuncios(id) on delete cascade,
+  user_id    uuid not null references auth.users(id) on delete cascade,
+  ocorrencia timestamptz not null,
+  visto_em   timestamptz not null default now(),
+  primary key (anuncio_id, user_id, ocorrencia)
+);
+
+alter table public.anuncios        enable row level security;
+alter table public.anuncios_vistos enable row level security;
+drop policy if exists anuncios_gestor on public.anuncios;
+create policy anuncios_gestor on public.anuncios for all to authenticated
+  using (public.is_gestor()) with check (public.is_gestor());
+drop policy if exists anuncios_vistos_gestor on public.anuncios_vistos;
+create policy anuncios_vistos_gestor on public.anuncios_vistos for select to authenticated
+  using (public.is_gestor());
+
+-- Ocorrência mais recente que já começou (null = ainda não começou).
+create or replace function public._anuncio_ocorrencia(p_inicio timestamptz, p_rec text, p_agora timestamptz default now())
+returns timestamptz
+language plpgsql stable
+set search_path = public
+as $$
+declare n int; t timestamptz;
+begin
+  if p_inicio > p_agora then return null; end if;
+  if p_rec = 'diaria' then
+    return p_inicio + floor(extract(epoch from p_agora - p_inicio) / 86400)::int * interval '1 day';
+  elsif p_rec = 'semanal' then
+    return p_inicio + floor(extract(epoch from p_agora - p_inicio) / 604800)::int * interval '7 days';
+  elsif p_rec = 'mensal' then
+    n := (extract(year from age(p_agora, p_inicio)) * 12 + extract(month from age(p_agora, p_inicio)))::int;
+    t := p_inicio + n * interval '1 month';
+    if t > p_agora then t := p_inicio + (n - 1) * interval '1 month'; end if;
+    return t;
+  end if;
+  return p_inicio;
+end $$;
+
+-- Anúncios que o usuário logado ainda precisa ver agora.
+create or replace function public.meus_anuncios()
+returns table (id uuid, titulo text, mensagem text, ocorrencia timestamptz)
+language sql stable security definer
+set search_path = public
+as $$
+  select a.id, a.titulo, a.mensagem, o.oc
+  from public.anuncios a
+  cross join lateral (select public._anuncio_ocorrencia(a.inicio, a.recorrencia) as oc) o
+  where auth.uid() is not null
+    and a.ativo
+    and o.oc is not null
+    and (a.expira_em is null or (now() at time zone 'America/Sao_Paulo')::date < a.expira_em)
+    and not exists (select 1 from public.anuncios_vistos v
+                    where v.anuncio_id = a.id and v.user_id = auth.uid() and v.ocorrencia = o.oc)
+  order by o.oc;
+$$;
+revoke all on function public.meus_anuncios() from public, anon;
+grant execute on function public.meus_anuncios() to authenticated;
+
+-- Botão "Entendi".
+create or replace function public.anuncio_entendi(p_anuncio uuid, p_ocorrencia timestamptz)
+returns void
+language plpgsql security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then raise exception 'Faça login para continuar.'; end if;
+  insert into public.anuncios_vistos (anuncio_id, user_id, ocorrencia)
+  select p_anuncio, auth.uid(), p_ocorrencia
+  where exists (select 1 from public.anuncios where id = p_anuncio)
+  on conflict do nothing;
+end $$;
+revoke all on function public.anuncio_entendi(uuid, timestamptz) from public, anon;
+grant execute on function public.anuncio_entendi(uuid, timestamptz) to authenticated;
+
+-- ---------------------------------------------------------------------
 -- Aulas iniciais (EXEMPLO — edite preços e vagas pelo app)
 -- ---------------------------------------------------------------------
 insert into public.aulas (nome, descricao, vagas, ordem)

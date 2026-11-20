@@ -3,6 +3,7 @@ import { sb, ok, configurado } from './supabase.js';
 import { esc, abrirModal, fecharTodosModais, toast, comBotao, carregando, erroBox, linkWhatsApp, ICONE_WHATSAPP } from './ui.js';
 import { renderHome } from './home.js';
 import { iniciarNotificacoes, pararNotificacoes } from './notificacoes.js';
+import { iniciarAnuncios, pararAnuncios, renderAnuncios } from './anuncios.js';
 
 // papel: 'gestor' (gestor principal ou admin) | 'professor' | 'aluno' | null (visitante)
 // principal: true só para o gestor principal (pode gerenciar admins)
@@ -17,6 +18,7 @@ const ROTAS = {
     { rota: 'alunos', rotulo: 'Alunos' },
     { rota: 'cobrancas', rotulo: 'Cobranças' },
     { rota: 'relatorios', rotulo: 'Relatórios' },
+    { rota: 'anuncios', rotulo: 'Anúncios' },
     { rota: 'equipe', rotulo: 'Equipe' },
   ],
   professor: [
@@ -28,7 +30,7 @@ const ROTAS = {
     { rota: 'aulas', rotulo: 'Aulas' },
   ],
 };
-const ROTAS_GESTOR = ['alunos', 'cobrancas', 'relatorios', 'equipe'];
+const ROTAS_GESTOR = ['alunos', 'cobrancas', 'relatorios', 'anuncios', 'equipe'];
 
 function navegar(hash) {
   if (location.hash === hash) rotear();
@@ -196,6 +198,9 @@ async function rotear() {
   renderizadoComo = estado.papel;
   fecharTodosModais();
   atualizarWhatsApp();
+  // Anúncios em balão: só alunos e professores, depois do primeiro acesso concluído.
+  if ((estado.papel === 'aluno' || estado.papel === 'professor') && !primeiroAcessoPendente()) iniciarAnuncios();
+  else pararAnuncios();
   const partes = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   let rota = partes[0] || '';
 
@@ -273,6 +278,8 @@ async function rotear() {
       const { renderRelatorios } = await import('./relatorios.js');
       if (minha !== versaoRota) return;
       await renderRelatorios(raiz, { navegar });
+    } else if (rota === 'anuncios') {
+      await renderAnuncios(raiz);
     } else if (rota === 'equipe') {
       const { renderEquipe } = await import('./equipe.js');
       if (minha !== versaoRota) return;

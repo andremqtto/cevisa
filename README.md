@@ -102,6 +102,13 @@ Para publicar, envie a pasta inteira para qualquer hospedagem estática (Netlify
 
 **Cobranças:** pendentes, atrasadas, pagas e diárias, com busca e registro de pagamento. **Lançar diária** registra um pagamento avulso: valor, método, data e, se quiser, a modalidade.
 
+**Anúncios:** aba só da equipe de gestão (gestor e admins). Um anúncio tem título (opcional) e mensagem, e pode:
+- aparecer **agora** ou ser **programado** para uma data e hora;
+- aparecer **uma vez** ou **repetir** todo dia, toda semana ou todo mês, no mesmo horário do início;
+- ter **data de expiração**: a partir desse dia ele some sozinho.
+
+Alunos e professores veem o anúncio num **balão flutuante** ao abrir o app. O botão **Entendi** só libera depois de 5 segundos, com a contagem no próprio botão. Cada pessoa vê o anúncio uma vez por ocorrência; um anúncio diário volta no dia seguinte. A lista mostra quantas confirmações de leitura cada anúncio teve, com os botões **Prévia**, **Editar**, **Pausar/Reativar** e **Excluir**.
+
 **Relatórios:** por mês, em duas sub-abas. **Geral** mostra novos alunos, planos contratados, mensalidades recebidas, diárias recebidas, total recebido, a receber, alunos em débito e as listas de pagamentos e diárias. **Modalidades** mostra os mesmos números separados por aula. Tem botão de imprimir.
 
 ## Decisões que tomei (fáceis de mudar)
