@@ -78,6 +78,8 @@ Para publicar, envie a pasta inteira para qualquer hospedagem estática (Netlify
 
 **Horários:** cada aula tem um campo de horários (um por linha), editado pelo gestor em **Editar**. Aparecem na tela inicial e no painel do aluno.
 
+**Grupo de WhatsApp da aula:** em **Editar** (no cartão da aula), o campo **Link do grupo de WhatsApp** (ex.: `https://chat.whatsapp.com/...`). Uma turma pode ter um grupo próprio, no campo **Grupo de WhatsApp da turma** (em **Turmas**); se ficar vazio, vale o grupo da aula. Quem tem matrícula ativa na aula recebe, ao abrir o painel, uma janela com o botão **Entrar no grupo**. A janela volta a aparecer a cada visita até o aluno tocar no botão. O cartão da aula no painel também tem o botão **Grupo da turma no WhatsApp**. Se o link for trocado, todos os inscritos recebem a janela de novo. O link não aparece na tela pública nem para quem está na lista de espera.
+
 **Turmas:** cada aula pode ter várias turmas, em **Turmas** no cartão da aula. Cada turma tem nome, horários, características (nível, faixa etária, professor…) e vagas próprias. Os alunos veem as turmas no cartão; a equipe vê a ocupação de cada uma. Aula sem turmas continua usando as vagas e os horários da própria aula. Na ficha do aluno, **Trocar turma** muda o aluno de turma.
 
 **Inscrição pelo app:** no cartão da aula, o aluno vê **Fazer inscrição** enquanto houver vaga. Quando as vagas acabam, o botão fica **amarelo** e mostra **Fila de espera**. Ao pedir, o aluno escolhe a turma (as sem vaga aparecem em cinza e não podem ser escolhidas) e o plano. A equipe recebe o pedido no sino e conclui a inscrição na ficha; a cobrança aparece na hora no painel do aluno.
@@ -89,6 +91,8 @@ Para publicar, envie a pasta inteira para qualquer hospedagem estática (Netlify
 **Alunos:** busca e filtros (ativos, desativados, plano vencido, lista de espera). Clicando no aluno abre a ficha: botão **Enviar mensagem** (abre o WhatsApp do aluno pelo telefone cadastrado), dados pessoais, aulas e planos (início, pago até, meses trancados), histórico de pagamentos, ativar/desativar, inscrever em aula.
 
 **Vagas e lista de espera:** se a turma está cheia, a inscrição entra na lista de espera, por ordem de reserva. Quando uma vaga abre (matrícula encerrada ou vagas aumentadas), o primeiro da fila é promovido automaticamente, uma cobrança é gerada e o gestor recebe uma notificação.
+
+**Questionário de saúde (PAR-Q):** obrigatório no cadastro. São 7 perguntas de sim/não sobre quem vai fazer as aulas, mais uma declaração de veracidade. Quem já tinha cadastro responde no próximo acesso, e o app só libera depois disso. Uma resposta “sim” não impede o cadastro: o app recomenda avaliação médica e atestado de liberação, e a equipe recebe um aviso no sino. Na ficha do aluno, a linha **Questionário de saúde (PAR-Q)** mostra a situação (**Apto** ou **N respostas “sim”**), com o link **ver respostas**.
 
 **Vínculo com o Cevisa (preço):** no cadastro, a pessoa marca se é **Externo** (preço normal), **Funcionário** (aulas sem custo) ou **Prestador** (plano mensal de R$ 100,00 em todas as aulas; semestral e anual com preço normal). Funcionário e prestador geram um aviso no sino e só valem depois que a equipe **confirma na ficha** (a equipe também pode mudar o vínculo por lá ou ao editar o cadastro). Se as aulas forem de um **dependente**, vale sempre o preço normal. Ao confirmar ou mudar, as cobranças pendentes são recalculadas na hora. Para funcionário, a cobrança de R$ 0,00 é quitada automaticamente ("Isento (funcionário)") e o plano se renova sozinho.
 
@@ -102,7 +106,7 @@ Para publicar, envie a pasta inteira para qualquer hospedagem estática (Netlify
 
 **Cobranças:** pendentes, atrasadas, pagas e diárias, com busca e registro de pagamento. **Lançar diária** registra um pagamento avulso: valor, método, data e, se quiser, a modalidade.
 
-**Anúncios:** aba só da equipe de gestão (gestor e admins). Um anúncio tem título (opcional) e mensagem, e pode:
+**Anúncios (oculto no momento — para reativar, troque `ANUNCIOS_ATIVOS` para `true` em `js/app.js`):** aba só da equipe de gestão (gestor e admins). Um anúncio tem título (opcional) e mensagem, e pode:
 - aparecer **agora** ou ser **programado** para uma data e hora;
 - aparecer **uma vez** ou **repetir** todo dia, toda semana ou todo mês, no mesmo horário do início;
 - ter **data de expiração**: a partir desse dia ele some sozinho.

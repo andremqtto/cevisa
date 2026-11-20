@@ -5,6 +5,9 @@ import { renderHome } from './home.js';
 import { iniciarNotificacoes, pararNotificacoes } from './notificacoes.js';
 import { iniciarAnuncios, pararAnuncios, renderAnuncios } from './anuncios.js';
 
+// Aba "Anúncios" (e o balão dos alunos) oculta por enquanto. Para reativar, troque para true.
+const ANUNCIOS_ATIVOS = false;
+
 // papel: 'gestor' (gestor principal ou admin) | 'professor' | 'aluno' | null (visitante)
 // principal: true só para o gestor principal (pode gerenciar admins)
 // trocarSenha: entrou com senha temporária; cadastrosPendentes: fichas que o aluno ainda precisa completar
@@ -18,7 +21,7 @@ const ROTAS = {
     { rota: 'alunos', rotulo: 'Alunos' },
     { rota: 'cobrancas', rotulo: 'Cobranças' },
     { rota: 'relatorios', rotulo: 'Relatórios' },
-    { rota: 'anuncios', rotulo: 'Anúncios' },
+    ...(ANUNCIOS_ATIVOS ? [{ rota: 'anuncios', rotulo: 'Anúncios' }] : []),
     { rota: 'equipe', rotulo: 'Equipe' },
   ],
   professor: [
@@ -30,7 +33,7 @@ const ROTAS = {
     { rota: 'aulas', rotulo: 'Aulas' },
   ],
 };
-const ROTAS_GESTOR = ['alunos', 'cobrancas', 'relatorios', 'anuncios', 'equipe'];
+const ROTAS_GESTOR = ['alunos', 'cobrancas', 'relatorios', ...(ANUNCIOS_ATIVOS ? ['anuncios'] : []), 'equipe'];
 
 function navegar(hash) {
   if (location.hash === hash) rotear();
@@ -199,7 +202,7 @@ async function rotear() {
   fecharTodosModais();
   atualizarWhatsApp();
   // Anúncios em balão: só alunos e professores, depois do primeiro acesso concluído.
-  if ((estado.papel === 'aluno' || estado.papel === 'professor') && !primeiroAcessoPendente()) iniciarAnuncios();
+  if (ANUNCIOS_ATIVOS && (estado.papel === 'aluno' || estado.papel === 'professor') && !primeiroAcessoPendente()) iniciarAnuncios();
   else pararAnuncios();
   const partes = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   let rota = partes[0] || '';

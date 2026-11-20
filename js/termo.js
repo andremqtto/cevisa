@@ -16,6 +16,7 @@ export const TERMO_HTML = `
     <ul>
       <li>Do responsável (titular do cadastro): nome, telefone/WhatsApp, e-mail, CPF, data de nascimento e endereço.</li>
       <li>De quem faz as aulas (o próprio responsável ou um dependente): nome, data de nascimento e <strong>foto de perfil</strong>.</li>
+      <li>De quem faz as aulas: respostas do <strong>questionário de saúde (PAR-Q)</strong>, dado sensível usado só para a segurança na prática de atividade física.</li>
       <li>Dados das aulas e financeiros: modalidades, turmas, planos, cobranças, pagamentos e comprovantes enviados.</li>
     </ul>
 
@@ -23,6 +24,7 @@ export const TERMO_HTML = `
     <ul>
       <li>Fazer a inscrição e organizar as turmas e a lista de espera.</li>
       <li>Identificar o aluno na recepção e nas aulas (por isso a foto de perfil).</li>
+      <li>Avaliar, pelo PAR-Q, se é preciso liberação médica antes das aulas (visto apenas pela equipe do Cevisa).</li>
       <li>Gerar cobranças, registrar pagamentos e enviar avisos de vencimento.</li>
       <li>Entrar em contato pelo telefone, WhatsApp ou e-mail sobre aulas, horários e pagamentos.</li>
     </ul>

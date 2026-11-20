@@ -111,7 +111,7 @@ main { max-width: 1160px; margin: 0 auto; padding: 28px 20px 60px; }
 .campo { display: block; margin-bottom: 14px; }
 .campo > span { display: block; font-weight: 600; font-size: 14px; margin-bottom: 4px; }
 .campo small { display: block; color: var(--suave); margin-top: 3px; }
-input[type=text], input[type=email], input[type=password], input[type=tel], input[type=number],
+input[type=text], input[type=email], input[type=password], input[type=tel], input[type=number], input[type=url],
 input[type=date], input[type=datetime-local], input[type=month], input[type=search], select, textarea {
   width: 100%; padding: 10px 12px; border: 1.5px solid var(--borda); border-radius: 10px; background: #fff;
 }
@@ -541,7 +541,7 @@ body:has(#whats) main { padding-bottom: 110px; }
   .icone-btn { width: 44px; height: 44px; }
   .chip button { padding: 6px 10px; }
   .check input { width: 22px; height: 22px; }
-  input[type=text], input[type=email], input[type=password], input[type=tel], input[type=number],
+  input[type=text], input[type=email], input[type=password], input[type=tel], input[type=number], input[type=url],
   input[type=date], input[type=datetime-local], input[type=month], input[type=search], select, textarea { font-size: 16px; min-height: 44px; } /* 16px evita zoom no iOS */
   .acoes .btn { flex: 1 1 auto; }
 
@@ -686,3 +686,29 @@ body:has(#whats) .assinatura { padding-bottom: 84px; }
 .lm-mes span:nth-of-type(1) { flex: 1; }
 .lm-mes:has(input:checked:not(:disabled)) { border-color: var(--azul); background: var(--azul-fundo); }
 .lm-mes.pago { opacity: .7; cursor: default; }
+
+/* Grupo de WhatsApp da aula (painel do aluno) */
+.grupo-btn { margin-top: 10px; align-self: flex-start; }
+.grupo-convite { text-align: center; }
+.grupo-convite p { margin: 0 0 8px; }
+.grupo-convite .sub { margin-bottom: 16px; }
+.grupo-icone { width: 64px; height: 64px; margin: 4px auto 12px; border-radius: 50%; background: #13843f; color: #fff; display: grid; place-items: center; }
+.grupo-icone svg { width: 34px; height: 34px; }
+.grupo-convite .btn.whats { justify-content: center; }
+
+/* Questionário PAR-Q */
+fieldset.parq { border: 1.5px solid var(--borda); border-radius: 12px; padding: 12px 14px; margin: 4px 0 16px; }
+fieldset.parq legend { font-weight: 700; color: var(--azul); padding: 0 6px; }
+.parq-lista { margin: 0 0 12px; padding-left: 22px; display: grid; gap: 12px; }
+.parq-lista li { padding-left: 2px; }
+.parq-lista li > span { display: block; margin-bottom: 6px; }
+.parq-opcoes { display: flex; gap: 8px; }
+.parq-opcoes label { display: inline-flex; align-items: center; gap: 6px; border: 1.5px solid var(--borda); border-radius: 999px; padding: 6px 16px; cursor: pointer; font-weight: 600; min-height: 40px; }
+.parq-opcoes input { accent-color: var(--azul); width: 18px; height: 18px; margin: 0; }
+.parq-opcoes label:has(input:checked) { border-color: var(--azul); background: var(--azul-fundo); }
+.parq-opcoes label:has(input[value=sim]:checked) { border-color: var(--alerta); background: var(--alerta-fundo); color: var(--alerta); }
+.parq-declaro { align-items: flex-start; font-weight: 500; margin: 0; }
+.parq-declaro input { flex: none; margin-top: 3px; }
+.parq-respostas li { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start; }
+.parq-respostas li > span { margin: 0; }
+.parq-respostas .parq-sim { color: var(--erro); }

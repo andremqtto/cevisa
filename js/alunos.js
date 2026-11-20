@@ -8,6 +8,7 @@ import {
 } from './ui.js';
 import { registrarPagamento } from './financeiro.js';
 import { avatarHTML, ativarFotos, salvarFoto } from './fotos.js';
+import { parqResumoHTML, abrirRespostasParq } from './parq.js';
 import * as config from './config.js';
 
 const MESES_PLANO = { mensal: 1, semestral: 6, anual: 12 };
@@ -439,7 +440,8 @@ export async function renderFicha(el, id, { navegar }) {
           : 'O próprio responsável')}
         ${aluno.responsavel ? dado('Responsável (cadastro antigo)', aluno.responsavel) : ''}
         <div><dt>Vínculo com o Cevisa</dt><dd>${vinculoHTML(aluno)}</dd></div>
-        <div><dt>Termo de privacidade (LGPD)</dt><dd>${aluno.termo_aceito_em ? `<span class="badge ok">Aceito</span> em ${fmtDate(aluno.termo_aceito_em.slice(0, 10))}${aluno.termo_versao ? ` · versão ${esc(aluno.termo_versao)}` : ''}` : aluno.user_id ? '<span class="badge alerta">Pendente</span> será pedido no próximo acesso' : '<span class="badge cinza">Sem acesso ao app</span> colher a autorização em papel'}</dd></div>${dado('Endereço', aluno.endereco)}
+        <div><dt>Termo de privacidade (LGPD)</dt><dd>${aluno.termo_aceito_em ? `<span class="badge ok">Aceito</span> em ${fmtDate(aluno.termo_aceito_em.slice(0, 10))}${aluno.termo_versao ? ` · versão ${esc(aluno.termo_versao)}` : ''}` : aluno.user_id ? '<span class="badge alerta">Pendente</span> será pedido no próximo acesso' : '<span class="badge cinza">Sem acesso ao app</span> colher a autorização em papel'}</dd></div>
+        <div><dt>Questionário de saúde (PAR-Q)</dt><dd>${parqResumoHTML(aluno)}</dd></div>${dado('Endereço', aluno.endereco)}
         ${dado('Observações', aluno.observacoes)}
       </dl>
     </section>
@@ -506,6 +508,7 @@ export async function renderFicha(el, id, { navegar }) {
       });
     };
   });
+  el.querySelector('[data-ver-parq]')?.addEventListener('click', () => abrirRespostasParq(aluno, nomeParticipante(aluno)));
   el.querySelectorAll('[data-vinculo]').forEach((b) => {
     b.onclick = async () => {
       const v = b.dataset.vinculo;

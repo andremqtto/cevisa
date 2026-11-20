@@ -16,6 +16,7 @@ const ROTULOS = {
   comprovante_enviado: 'Comprovante enviado',
   vinculo_declarado: 'Vínculo a confirmar',
   trancamento_solicitado: 'Pedido de trancamento',
+  parq_alerta: 'PAR-Q: avaliação médica',
 };
 // Tipos que também aparecem como banner no topo da tela (o aluno está esperando uma resposta).
 const TIPOS_BANNER = ['pagamento_informado', 'comprovante_enviado'];

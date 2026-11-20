@@ -6,7 +6,7 @@ import { codigoPix, qrSVG } from './pix.js';
 import {
   esc, money, fmtDate, planoLabel, PLANOS, hojeISO, diasEntre, abrirModal, toast, comBotao, carregando, vazio, erroBox,
   fmtMes, fmtMesLongo, primeiroDiaMes,
-  horariosHTML, precoVinculo, moneyOuIsento, VINCULOS,
+  horariosHTML, precoVinculo, moneyOuIsento, VINCULOS, ICONE_WHATSAPP,
 } from './ui.js';
 
 // Nome de quem faz as aulas (dependente) ou, se for o próprio responsável, o nome do cadastro.
@@ -103,6 +103,12 @@ export async function renderPainelAluno(el) {
   el.querySelector('#ja-paguei').onclick = () => informarPagamento({ total, vencimento: vencimento || proximo, aPagar }, () => renderPainelAluno(el));
   ativarFotos(el);
   el.querySelector('.minhas-aulas')?.addEventListener('click', (e) => {
+    const g = e.target.closest('[data-grupo]');
+    if (g) {
+      const mat = alunos.flatMap((a) => a.matriculas).find((x) => x.id === g.dataset.grupo);
+      if (mat) marcarGrupo(mat);
+      return;
+    }
     const b = e.target.closest('[data-trancar]');
     if (!b) return;
     const mat = alunos.flatMap((a) => a.matriculas).find((x) => x.id === b.dataset.trancar);
@@ -110,7 +116,9 @@ export async function renderPainelAluno(el) {
   });
   el.querySelector('#comprovante').onclick = () => enviarComprovante(alunos);
   el.querySelector('#pagar-pix')?.addEventListener('click', () => pagarComPix({ total: aPagar.length ? total : null, vencimento }, () => enviarComprovante(alunos)));
+  if (!grupoOferecido) { grupoOferecido = true; oferecerGrupos(alunos); }
 }
+let grupoOferecido = false; // a janela do grupo aparece uma vez por visita ao app (até o aluno entrar no grupo)
 
 // ------------------------------------------------------------------ Pix
 const ICONE_PIX = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5 21.5 12 12 21.5 2.5 12z"/><path d="M7.5 7.5 12 12l4.5-4.5M7.5 16.5 12 12l4.5 4.5"/></svg>';
@@ -284,8 +292,45 @@ function cartaoAula(aluno, m, item, varios, hoje) {
           <div><dt>Pago até</dt><dd>${pagoAte}</dd></div>
           ${m.trancados?.length ? `<div><dt>Meses trancados</dt><dd>${m.trancados.map(fmtMes).join(', ')}</dd></div>` : ''}`}
       </dl>
+      ${m.grupo ? `<a class="btn whats pequeno grupo-btn" href="${esc(m.grupo)}" target="_blank" rel="noopener" data-grupo="${m.id}">${ICONE_WHATSAPP}Grupo da turma no WhatsApp</a>` : ''}
       ${trancamentoHTML(m)}
     </article>`;
+}
+
+// ------------------------------------------------------------------ grupo de WhatsApp da aula
+/** Ao ser inscrito numa aula que tem grupo, o aluno recebe o link numa janela (até abrir o grupo). */
+function oferecerGrupos(alunos) {
+  const fila = alunos.flatMap((a) => a.matriculas.filter((m) => m.grupo && !m.grupo_visto).map((m) => ({ a, m })));
+  const proximo = () => {
+    const item = fila.shift();
+    if (!item) return;
+    const { a, m } = item;
+    const j = abrirModal({
+      titulo: 'Grupo do WhatsApp',
+      largura: 420,
+      corpo: `
+        <div class="grupo-convite">
+          <div class="grupo-icone">${ICONE_WHATSAPP}</div>
+          <p><strong>${quem(a) !== a.nome || alunos.length > 1 ? `${esc(quem(a).split(' ')[0])} está inscrito(a)` : 'Você está inscrito(a)'} em ${esc(m.aula)}${m.turma ? ` — ${esc(m.turma)}` : ''}!</strong></p>
+          <p class="sub">Entre no grupo do WhatsApp da aula para receber avisos, horários e novidades.</p>
+          <a class="btn whats largo" href="${esc(m.grupo)}" target="_blank" rel="noopener" data-entrar>${ICONE_WHATSAPP}Entrar no grupo</a>
+          <button class="link" type="button" data-depois style="margin-top:10px">Agora não</button>
+        </div>`,
+      aoFechar: () => setTimeout(proximo, 300),
+    });
+    j.el.querySelector('[data-entrar]').addEventListener('click', () => {
+      marcarGrupo(m);
+      setTimeout(() => j.fechar(), 150);
+    });
+    j.el.querySelector('[data-depois]').onclick = () => j.fechar();
+  };
+  proximo();
+}
+
+function marcarGrupo(m) {
+  if (m.grupo_visto) return;
+  m.grupo_visto = true;
+  sb.rpc('marcar_grupo_visto', { p_matricula: m.id }).then(({ error }) => { if (error) console.warn('marcar_grupo_visto:', error.message); });
 }
 
 // ------------------------------------------------------------------ trancamento (aluno pede, equipe aprova)

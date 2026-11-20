@@ -155,6 +155,10 @@ alter table public.alunos add column if not exists foto text;
 -- Termo de uso e privacidade (LGPD): quando o responsável aceitou e qual versão do texto.
 alter table public.alunos add column if not exists termo_aceito_em timestamptz;
 alter table public.alunos add column if not exists termo_versao    text;
+-- Questionário PAR-Q (prontidão para atividade física), obrigatório no cadastro.
+-- parq = {"q1": false, ..., "q7": false}; sim em alguma = recomendar avaliação médica.
+alter table public.alunos add column if not exists parq    jsonb;
+alter table public.alunos add column if not exists parq_em timestamptz;
 
 -- Vínculo com o Cevisa (define o preço): externo = preço normal; funcionario = aulas sem custo;
 -- prestador = plano mensal de R$ 100,00 (semestral/anual com preço normal).
@@ -204,6 +208,25 @@ create unique index if not exists solicitacoes_uma_pendente
 -- Preço da diária (aula avulsa).
 alter table public.aulas add column if not exists preco_diaria numeric(10,2) check (preco_diaria is null or preco_diaria >= 0);
 
+-- Grupo de WhatsApp de cada aula: o aluno inscrito recebe o link numa janela no painel.
+-- (só aparece para quem tem matrícula ativa; não sai na tela pública)
+alter table public.aulas add column if not exists whatsapp_grupo text
+  check (whatsapp_grupo is null or whatsapp_grupo ~* '^https://');
+alter table public.matriculas add column if not exists grupo_visto boolean not null default false;
+
+-- Link do grupo trocado: todos os inscritos recebem a janela de novo.
+create or replace function public._tg_aulas_grupo()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.whatsapp_grupo is distinct from old.whatsapp_grupo then
+    update public.matriculas set grupo_visto = false where aula_id = new.id and grupo_visto;
+  end if;
+  return new;
+end $$;
+drop trigger if exists aulas_grupo on public.aulas;
+create trigger aulas_grupo after update of whatsapp_grupo on public.aulas
+  for each row execute function public._tg_aulas_grupo();
+
 -- Turmas de cada aula: horários, características e vagas próprias.
 -- Aula SEM turmas continua usando aulas.vagas; aula COM turmas usa as vagas de cada turma.
 create table if not exists public.turmas (
@@ -221,6 +244,21 @@ create index if not exists turmas_aula_idx on public.turmas (aula_id, ordem);
 alter table public.matriculas add column if not exists turma_id uuid references public.turmas(id) on delete set null;
 create index if not exists matriculas_turma_idx on public.matriculas (turma_id, status, created_at);
 alter table public.solicitacoes_inscricao add column if not exists turma_id uuid references public.turmas(id) on delete set null;
+
+-- Grupo de WhatsApp próprio da turma (ex.: turma de um professor). Vazio = usa o grupo da aula.
+alter table public.turmas add column if not exists whatsapp_grupo text
+  check (whatsapp_grupo is null or whatsapp_grupo ~* '^https://');
+create or replace function public._tg_turmas_grupo()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.whatsapp_grupo is distinct from old.whatsapp_grupo then
+    update public.matriculas set grupo_visto = false where turma_id = new.id and grupo_visto;
+  end if;
+  return new;
+end $$;
+drop trigger if exists turmas_grupo on public.turmas;
+create trigger turmas_grupo after update of whatsapp_grupo on public.turmas
+  for each row execute function public._tg_turmas_grupo();
 
 -- Diárias (pagamentos avulsos lançados manualmente pela equipe).
 create table if not exists public.diarias (
@@ -251,7 +289,7 @@ create index if not exists comprovantes_aluno_idx on public.comprovantes (aluno_
 alter table public.notificacoes add column if not exists solicitacao_id uuid references public.solicitacoes_inscricao(id) on delete cascade;
 alter table public.notificacoes drop constraint if exists notificacoes_tipo_check;
 alter table public.notificacoes add constraint notificacoes_tipo_check
-  check (tipo in ('vence_em_breve','vencido','vaga_liberada','pagamento_informado','inscricao_solicitada','comprovante_enviado','vinculo_declarado','trancamento_solicitado'));
+  check (tipo in ('vence_em_breve','vencido','vaga_liberada','pagamento_informado','inscricao_solicitada','comprovante_enviado','vinculo_declarado','trancamento_solicitado','parq_alerta'));
 
 -- Se o gestor trocar o e-mail do aluno, o acesso antigo deixa de valer.
 create or replace function public._tg_alunos_email()
@@ -1040,6 +1078,7 @@ begin
                        'data_inicio', m.data_inicio, 'data_fim', m.data_fim,
                        'aula', au.nome, 'horarios', coalesce(t.horarios, au.horarios),
                        'turma_id', m.turma_id, 'turma', t.nome,
+                       'grupo', case when m.status = 'ativa' then coalesce(t.whatsapp_grupo, au.whatsapp_grupo) end, 'grupo_visto', m.grupo_visto,
                        'trancados', coalesce((select jsonb_agg(tr.mes order by tr.mes) from public.trancamentos tr where tr.matricula_id = m.id), '[]'::jsonb),
                        'tranc_pedido', (select jsonb_build_object('mes', tp.mes, 'status', tp.status) from public.trancamento_pedidos tp
                                          where tp.matricula_id = m.id and tp.mes >= date_trunc('month', current_date)::date
@@ -1243,9 +1282,10 @@ returns jsonb language sql stable security definer set search_path = public as $
   select coalesce(jsonb_agg(jsonb_build_object(
            'id', a.id, 'email', a.email, 'nome', a.nome, 'participante', public._participante(a),
            'so_complemento', a.cadastro_completo,
-           'precisa_foto', a.foto is null, 'precisa_termo', a.termo_aceito_em is null) order by a.created_at), '[]'::jsonb)
+           'precisa_foto', a.foto is null, 'precisa_termo', a.termo_aceito_em is null,
+           'precisa_parq', a.parq_em is null) order by a.created_at), '[]'::jsonb)
     from public.alunos a
-   where a.user_id = auth.uid() and (not a.cadastro_completo or a.foto is null or a.termo_aceito_em is null);
+   where a.user_id = auth.uid() and (not a.cadastro_completo or a.foto is null or a.termo_aceito_em is null or a.parq_em is null);
 $$;
 
 -- O responsável informa no cadastro o vínculo (externo, funcionário ou prestador).
@@ -1308,6 +1348,35 @@ begin
 end $$;
 revoke all on function public.aceitar_termo(uuid, text) from public, anon;
 grant execute on function public.aceitar_termo(uuid, text) to authenticated;
+
+-- Questionário PAR-Q respondido pelo responsável (sobre quem vai fazer as aulas).
+-- Resposta "sim" em alguma pergunta avisa a equipe no sino (pedir liberação médica).
+create or replace function public.responder_parq(p_aluno uuid, p_respostas jsonb)
+returns void language plpgsql security definer set search_path = public as $$
+declare a public.alunos; v_sim int := 0; i int; v_r jsonb := '{}'::jsonb;
+begin
+  if auth.uid() is null then raise exception 'Acesso negado.'; end if;
+  for i in 1..7 loop
+    if jsonb_typeof(p_respostas -> ('q' || i)) is distinct from 'boolean' then
+      raise exception 'Responda todas as perguntas do PAR-Q.';
+    end if;
+    v_r := v_r || jsonb_build_object('q' || i, (p_respostas ->> ('q' || i))::boolean);
+    if (p_respostas ->> ('q' || i))::boolean then v_sim := v_sim + 1; end if;
+  end loop;
+  update public.alunos set parq = v_r, parq_em = now()
+   where id = p_aluno and user_id = auth.uid()
+  returning * into a;
+  if not found then raise exception 'Cadastro não encontrado.'; end if;
+  if v_sim > 0 then
+    insert into public.notificacoes (tipo, aluno_id, referencia, mensagem)
+    values ('parq_alerta', p_aluno, current_date,
+            coalesce(nullif(a.participante_nome, ''), a.nome) || ' respondeu "sim" em ' || v_sim
+            || ' pergunta(s) do PAR-Q. Recomende avaliação médica e peça o atestado de liberação antes das aulas.')
+    on conflict do nothing;
+  end if;
+end $$;
+revoke all on function public.responder_parq(uuid, jsonb) from public, anon;
+grant execute on function public.responder_parq(uuid, jsonb) to authenticated;
 
 -- O responsável completa os dados no primeiro acesso, dizendo quem vai fazer as aulas
 -- (ele mesmo, ou um dependente com nome e data de nascimento).
@@ -1430,6 +1499,18 @@ revoke all on function public.informar_pagamento(text, text)    from public, ano
 grant execute on function public.vincular_aluno()               to authenticated;
 grant execute on function public.painel_aluno()                 to authenticated;
 grant execute on function public.informar_pagamento(text, text) to authenticated;
+
+-- Aluno abriu o link do grupo de WhatsApp da aula: a janela não aparece mais sozinha.
+create or replace function public.marcar_grupo_visto(p_matricula uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then raise exception 'Acesso negado.'; end if;
+  update public.matriculas m set grupo_visto = true
+    from public.alunos a
+   where m.id = p_matricula and a.id = m.aluno_id and a.user_id = auth.uid();
+end $$;
+revoke all on function public.marcar_grupo_visto(uuid) from public, anon;
+grant execute on function public.marcar_grupo_visto(uuid) to authenticated;
 
 -- ---------------------------------------------------------------------
 -- Comprovantes de pagamento enviados pelo aluno

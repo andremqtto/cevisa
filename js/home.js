@@ -257,6 +257,7 @@ function gerenciarTurmas(aula, aoMudar) {
           <label class="campo"><span>Vagas *</span><input type="number" name="vagas" min="0" step="1" required value="${t.vagas}"><small>Só a equipe vê este número.</small></label>
           <label class="campo"><span>Ordem</span><input type="number" name="ordem" step="1" value="${t.ordem}"></label>
         </div>
+        <label class="campo"><span>Grupo de WhatsApp da turma</span><input type="url" name="whatsapp_grupo" maxlength="300" inputmode="url" autocapitalize="none" placeholder="https://chat.whatsapp.com/…" value="${esc(t.whatsapp_grupo || '')}"><small>Opcional. Se ficar vazio, os alunos desta turma recebem o grupo da aula.</small></label>
         <label class="check"><input type="checkbox" name="ativa" ${t.ativa ? 'checked' : ''}> Mostrar esta turma aos alunos</label>
         <div id="t-erro"></div>
         <div class="acoes">
@@ -287,9 +288,12 @@ function gerenciarTurmas(aula, aoMudar) {
       const vagas = Number(form.vagas.value);
       if (!Number.isInteger(vagas) || vagas < 0) return erro('Vagas deve ser um número inteiro (0 ou mais).');
       const limpa = (v) => v.split('\n').map((l) => l.trim()).filter(Boolean).join('\n') || null;
+      const grupo = form.whatsapp_grupo.value.trim();
+      if (grupo && !/^https:\/\/\S+$/i.test(grupo)) return erro('O link do grupo precisa começar com https:// (ex.: https://chat.whatsapp.com/…).');
       const dados = {
         aula_id: aula.id, nome, vagas, ordem: Number(form.ordem.value) || 0, ativa: form.ativa.checked,
         horarios: limpa(form.horarios.value), descricao: form.descricao.value.trim() || null,
+        whatsapp_grupo: grupo || null,
       };
       await comBotao(form.querySelector('[type=submit]'), async () => {
         try {
@@ -324,6 +328,7 @@ function editarAula(aula, aoSalvar) {
           <label class="campo"><span>Diária (R$)</span><input type="number" name="preco_diaria" min="0" step="0.01" inputmode="decimal" value="${a.preco_diaria ?? ''}"></label>
         </div>
         <p class="sub" style="margin:-6px 0 14px">Semestral e anual são o valor <strong>total</strong> do plano. Deixe em branco para exibir “Consulte”.</p>
+        <label class="campo"><span>Link do grupo de WhatsApp</span><input type="url" name="whatsapp_grupo" maxlength="300" inputmode="url" autocapitalize="none" placeholder="https://chat.whatsapp.com/…" value="${esc(a.whatsapp_grupo || '')}"><small>Opcional. Quem for inscrito nesta aula recebe o link numa janela no app. Não aparece na tela pública.</small></label>
         <div class="grade2">
           <label class="campo"><span>Vagas *</span><input type="number" name="vagas" min="0" step="1" required value="${a.vagas}"><small>Só gestores veem. Se a aula tiver turmas, valem as vagas de cada turma.</small></label>
           <label class="campo"><span>Ordem na tela</span><input type="number" name="ordem" step="1" value="${a.ordem}"><small>Menor número aparece primeiro.</small></label>
@@ -400,6 +405,8 @@ function editarAula(aula, aoSalvar) {
     for (const n of ['preco_mensal', 'preco_semestral', 'preco_anual', 'preco_diaria']) {
       if (num(n) !== null && num(n) < 0) return erro('Os preços não podem ser negativos.');
     }
+    const grupo = form.whatsapp_grupo.value.trim();
+    if (grupo && !/^https:\/\/\S+$/i.test(grupo)) return erro('O link do grupo precisa começar com https:// (ex.: https://chat.whatsapp.com/…).');
     erro('');
     await comBotao(btn, async () => {
       let foto_url = a.foto_url;
@@ -424,6 +431,7 @@ function editarAula(aula, aoSalvar) {
         ordem: Number(form.ordem.value) || 0,
         ativa: form.ativa.checked,
         foto_url,
+        whatsapp_grupo: grupo || null,
       };
       ok(novo ? await sb.from('aulas').insert(dados) : await sb.from('aulas').update(dados).eq('id', a.id));
       toast(novo ? 'Aula criada.' : 'Aula atualizada.');
