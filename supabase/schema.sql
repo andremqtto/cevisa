@@ -1568,6 +1568,9 @@ create table if not exists public.anuncios_vistos (
 
 alter table public.anuncios        enable row level security;
 alter table public.anuncios_vistos enable row level security;
+grant select, insert, update, delete on public.anuncios to authenticated;
+grant select on public.anuncios_vistos to authenticated;  -- o "Entendi" é gravado pela função anuncio_entendi
+grant all on public.anuncios, public.anuncios_vistos to service_role;
 drop policy if exists anuncios_gestor on public.anuncios;
 create policy anuncios_gestor on public.anuncios for all to authenticated
   using (public.is_gestor()) with check (public.is_gestor());
