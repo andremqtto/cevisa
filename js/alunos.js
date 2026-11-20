@@ -377,6 +377,11 @@ export async function renderFicha(el, id, { navegar }) {
   const hoje = hojeISO();
   const s = situacao(mats);
   const dado = (rotulo, valor) => `<div><dt>${rotulo}</dt><dd>${valor ? esc(valor) : '—'}</dd></div>`;
+  const matsVivas = mats.filter((m) => m.status !== 'encerrada');
+  const matsEncerradas = mats.filter((m) => m.status === 'encerrada');
+  const tabelaMats = (lista) => `<div class="tabela-wrap"><table>
+        <thead><tr><th>Aula</th><th>Plano</th><th>Situação</th><th>Início</th><th>Pago até</th><th>Meses trancados</th><th></th></tr></thead>
+        <tbody>${lista.map((m) => linhaMatricula(m, filas[m.id], hoje, turmasPorAula[m.aula_id])).join('')}</tbody></table></div>`;
   const pendentes = pags.filter((p) => p.status === 'pendente');
   const totalPago = pags.filter((p) => p.status === 'pago').reduce((t, p) => t + Number(p.valor), 0);
 
@@ -462,10 +467,8 @@ export async function renderFicha(el, id, { navegar }) {
 
     <section class="card">
       <h2>Aulas e planos</h2>
-      ${mats.length ? `<div class="tabela-wrap"><table>
-        <thead><tr><th>Aula</th><th>Plano</th><th>Situação</th><th>Início</th><th>Pago até</th><th>Meses trancados</th><th></th></tr></thead>
-        <tbody>${mats.map((m) => linhaMatricula(m, filas[m.id], hoje, turmasPorAula[m.aula_id])).join('')}</tbody></table></div>`
-        : vazio('Este aluno ainda não está inscrito em nenhuma aula.')}
+      ${matsVivas.length ? tabelaMats(matsVivas)
+        : vazio(matsEncerradas.length ? 'Nenhuma aula ativa no momento. As encerradas estão no fim da página.' : 'Este aluno ainda não está inscrito em nenhuma aula.')}
     </section>
 
     ${comprovantes.length ? `
@@ -480,10 +483,7 @@ export async function renderFicha(el, id, { navegar }) {
     </section>` : ''}
 
     <section class="card">
-      <div class="card-topo">
-        <h2>Histórico de pagamentos ${pendentes.length ? `<span class="badge alerta">${pendentes.length} pendente(s)</span>` : ''}</h2>
-        ${mats.some((m) => m.status === 'ativa') ? '<button class="btn pequeno no-print" type="button" data-confirmar-pag>Confirmar pagamento</button>' : ''}
-      </div>
+      <h2>Histórico de pagamentos ${pendentes.length ? `<span class="badge alerta">${pendentes.length} pendente(s)</span>` : ''}</h2>
       ${pags.length ? `<div class="tabela-wrap"><table>
         <thead><tr><th>Referência</th><th>Aula</th><th>Plano</th><th class="num">Valor</th><th>Vencimento</th><th>Situação</th><th>Pago em</th><th>Forma</th><th></th></tr></thead>
         <tbody>${pags.map((p) => {
@@ -496,6 +496,12 @@ export async function renderFicha(el, id, { navegar }) {
             <td class="num acoes-cobranca">${(() => { const z = p.status === 'pendente' && linkCobrancaWhatsApp({ valor: p.valor, vencimento: p.vencimento, aula: p.matriculas?.aulas?.nome }, aluno); return z ? `<a class="btn pequeno whats" href="${esc(z)}" target="_blank" rel="noopener" title="Enviar a cobrança pelo WhatsApp">${ICONE_WHATSAPP}Cobrar</a> ` : ''; })()}${p.status === 'pendente' ? `<button class="btn pequeno" type="button" data-pagar="${p.id}">Registrar pagamento</button>` : ''}</td></tr>`;
         }).join('')}</tbody></table></div>` : vazio('Nenhum pagamento gerado ainda.')}
     </section>
+
+    ${matsEncerradas.length ? `
+    <details class="card encerradas">
+      <summary><h2>Aulas encerradas <span class="badge cinza">${matsEncerradas.length}</span></h2></summary>
+      ${tabelaMats(matsEncerradas)}
+    </details>` : ''}
 
     <section class="card zona-perigo no-print">
       <h2>Excluir aluno</h2>
@@ -586,7 +592,7 @@ export async function renderFicha(el, id, { navegar }) {
     });
   };
   el.querySelector('#inscrever').onclick = () => inscrever(aluno, mats, recarregar);
-  el.querySelectorAll('#confirmar-pag, [data-confirmar-pag]').forEach((b) => b.onclick = () => confirmarPagamentoInformado({
+  el.querySelectorAll('#confirmar-pag').forEach((b) => b.onclick = () => confirmarPagamentoInformado({
     alunoId: id, mensagem: avisosPag[0]?.mensagem || '', navegar,
     aoConcluir: () => {
       document.querySelectorAll(`#banners .banner[data-aluno="${id}"]`).forEach((b) => b.remove());

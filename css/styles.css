@@ -716,3 +716,11 @@ fieldset.parq legend { font-weight: 700; color: var(--azul); padding: 0 6px; }
 /* título de card com botão ao lado */
 .card-topo { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .card-topo h2 { margin: 0; }
+
+/* ficha: aulas encerradas recolhidas no fim da página */
+details.encerradas > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
+details.encerradas > summary::-webkit-details-marker { display: none; }
+details.encerradas > summary::before { content: '▸'; color: var(--texto-sec, #888); transition: transform .15s; }
+details.encerradas[open] > summary::before { transform: rotate(90deg); }
+details.encerradas > summary h2 { margin: 0; }
+details.encerradas[open] > summary { margin-bottom: 12px; }
