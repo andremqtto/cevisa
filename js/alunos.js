@@ -6,7 +6,7 @@ import {
   nomeParticipante, camposParticipante, ligarParticipante, lerParticipante,
   VINCULOS, vinculoPreco, precoVinculo, moneyOuIsento, camposVinculo,
 } from './ui.js';
-import { registrarPagamento } from './financeiro.js';
+import { registrarPagamento, confirmarPagamentoInformado } from './financeiro.js';
 import { avatarHTML, ativarFotos, salvarFoto } from './fotos.js';
 import { parqResumoHTML, abrirRespostasParq } from './parq.js';
 import * as config from './config.js';
@@ -330,7 +330,7 @@ export function editarAluno(aluno, aoSalvar) {
 // ================================================================== FICHA
 export async function renderFicha(el, id, { navegar }) {
   el.innerHTML = carregando('Carregando ficha…');
-  let aluno, mats, pags, filas, pedidos = [], comprovantes = [], turmasPorAula = {};
+  let aluno, mats, pags, filas, pedidos = [], comprovantes = [], avisosPag = [], turmasPorAula = {};
   try {
     aluno = ok(await sb.from('alunos').select('*').eq('id', id).maybeSingle());
     if (!aluno) { el.innerHTML = `<a class="voltar" href="#/alunos">← Alunos</a>${erroBox('Aluno não encontrado.')}`; return; }
@@ -346,6 +346,10 @@ export async function renderFicha(el, id, { navegar }) {
     const rc = await sb.from('comprovantes').select('id,arquivo,nome_arquivo,observacao,created_at').eq('aluno_id', id)
       .order('created_at', { ascending: false }).limit(20);
     comprovantes = rc.error ? [] : rc.data;
+    // avisos "já paguei" / comprovante ainda não confirmados
+    const rn = await sb.from('notificacoes').select('id,tipo,mensagem,created_at').eq('aluno_id', id)
+      .in('tipo', ['pagamento_informado', 'comprovante_enviado']).eq('lida', false).order('created_at', { ascending: false });
+    avisosPag = rn.error ? [] : rn.data;
     if (comprovantes.length) {
       const rs = await sb.storage.from('comprovantes').createSignedUrls(comprovantes.map((c) => c.arquivo), 3600);
       for (const c of comprovantes) c.url = rs.data?.find((x) => x.path === c.arquivo)?.signedUrl || null;
@@ -400,6 +404,16 @@ export async function renderFicha(el, id, { navegar }) {
         <button class="btn" type="button" id="inscrever">＋ Inscrever em aula</button>
       </div>
     </div>
+
+    ${avisosPag.length ? `
+    <section class="card pedidos no-print">
+      <h2>Pagamento informado pelo aluno <span class="badge alerta">${avisosPag.length}</span></h2>
+      <ul class="lista-equipe">${avisosPag.map((n) => `
+        <li><div>${esc(n.mensagem)}<small>${fmtDate(n.created_at.slice(0, 10))}</small></div></li>`).join('')}</ul>
+      <div class="acoes-linha" style="margin-top:12px">
+        <button class="btn" type="button" id="confirmar-pag">Confirmar pagamento</button>
+      </div>
+    </section>` : ''}
 
     ${pedidos.length ? `
     <section class="card pedidos no-print">
@@ -466,7 +480,10 @@ export async function renderFicha(el, id, { navegar }) {
     </section>` : ''}
 
     <section class="card">
-      <h2>Histórico de pagamentos ${pendentes.length ? `<span class="badge alerta">${pendentes.length} pendente(s)</span>` : ''}</h2>
+      <div class="card-topo">
+        <h2>Histórico de pagamentos ${pendentes.length ? `<span class="badge alerta">${pendentes.length} pendente(s)</span>` : ''}</h2>
+        ${mats.some((m) => m.status === 'ativa') ? '<button class="btn pequeno no-print" type="button" data-confirmar-pag>Confirmar pagamento</button>' : ''}
+      </div>
       ${pags.length ? `<div class="tabela-wrap"><table>
         <thead><tr><th>Referência</th><th>Aula</th><th>Plano</th><th class="num">Valor</th><th>Vencimento</th><th>Situação</th><th>Pago em</th><th>Forma</th><th></th></tr></thead>
         <tbody>${pags.map((p) => {
@@ -569,6 +586,13 @@ export async function renderFicha(el, id, { navegar }) {
     });
   };
   el.querySelector('#inscrever').onclick = () => inscrever(aluno, mats, recarregar);
+  el.querySelectorAll('#confirmar-pag, [data-confirmar-pag]').forEach((b) => b.onclick = () => confirmarPagamentoInformado({
+    alunoId: id, mensagem: avisosPag[0]?.mensagem || '', navegar,
+    aoConcluir: () => {
+      document.querySelectorAll(`#banners .banner[data-aluno="${id}"]`).forEach((b) => b.remove());
+      recarregar();
+    },
+  }));
   el.querySelectorAll('[data-aceitar-pedido]').forEach((b) => {
     b.onclick = () => {
       const p = pedidos.find((x) => x.id === b.dataset.aceitarPedido);

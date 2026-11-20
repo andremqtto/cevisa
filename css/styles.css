@@ -712,3 +712,7 @@ fieldset.parq legend { font-weight: 700; color: var(--azul); padding: 0 6px; }
 .parq-respostas li { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start; }
 .parq-respostas li > span { margin: 0; }
 .parq-respostas .parq-sim { color: var(--erro); }
+
+/* título de card com botão ao lado */
+.card-topo { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.card-topo h2 { margin: 0; }

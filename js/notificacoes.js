@@ -151,8 +151,8 @@ export function iniciarNotificacoes(host, { navegar }) {
     }
     const item = e.target.closest('.notif');
     if (!item) return;
-    // pagamento informado / comprovante ainda não confirmado: abre a confirmação direto
-    if (item.classList.contains('nova') && TIPOS_BANNER.some((t) => item.classList.contains(t)) && item.dataset.aluno) {
+    // pagamento informado / comprovante: abre a confirmação direto (mesmo já lido)
+    if (TIPOS_BANNER.some((t) => item.classList.contains(t)) && item.dataset.aluno) {
       fechar();
       return abrirConfirmacao({ aluno_id: item.dataset.aluno, mensagem: item.dataset.msg || '' });
     }
