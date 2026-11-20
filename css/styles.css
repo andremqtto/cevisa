@@ -718,9 +718,11 @@ fieldset.parq legend { font-weight: 700; color: var(--azul); padding: 0 6px; }
 .card-topo h2 { margin: 0; }
 
 /* ficha: aulas encerradas recolhidas no fim da página */
-details.encerradas > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
-details.encerradas > summary::-webkit-details-marker { display: none; }
-details.encerradas > summary::before { content: '▸'; color: var(--texto-sec, #888); transition: transform .15s; }
-details.encerradas[open] > summary::before { transform: rotate(90deg); }
-details.encerradas > summary h2 { margin: 0; }
-details.encerradas[open] > summary { margin-bottom: 12px; }
+details.encerradas > summary , details.recolhe > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
+details.encerradas > summary::-webkit-details-marker , details.recolhe > summary::-webkit-details-marker { display: none; }
+details.encerradas > summary::before , details.recolhe > summary::before { content: '▸'; color: var(--texto-sec, #888); transition: transform .15s; }
+details.encerradas[open] > summary::before , details.recolhe[open] > summary::before { transform: rotate(90deg); }
+details.encerradas > summary h2 , details.recolhe > summary h2 { margin: 0; }
+details.encerradas[open] > summary , details.recolhe[open] > summary { margin-bottom: 12px; }
+details.recolhe > summary h3 { margin: 0; font-size: 1rem; }
+details.historico-pag { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--borda, #e5e5e5); }

@@ -383,6 +383,18 @@ export async function renderFicha(el, id, { navegar }) {
         <thead><tr><th>Aula</th><th>Plano</th><th>Situação</th><th>Início</th><th>Pago até</th><th>Meses trancados</th><th></th></tr></thead>
         <tbody>${lista.map((m) => linhaMatricula(m, filas[m.id], hoje, turmasPorAula[m.aula_id])).join('')}</tbody></table></div>`;
   const pendentes = pags.filter((p) => p.status === 'pendente');
+  const historico = pags.filter((p) => p.status !== 'pendente');
+  const tabelaPags = (lista) => `<div class="tabela-wrap"><table>
+        <thead><tr><th>Referência</th><th>Aula</th><th>Plano</th><th class="num">Valor</th><th>Vencimento</th><th>Situação</th><th>Pago em</th><th>Forma</th><th></th></tr></thead>
+        <tbody>${lista.map((p) => {
+          const atraso = p.status === 'pendente' && p.vencimento < hoje;
+          return `<tr>
+            <td>${fmtMes(p.competencia)}</td><td>${esc(p.matriculas?.aulas?.nome)}</td><td>${planoLabel(p.plano)}</td>
+            <td class="num">${money(p.valor)}</td><td>${fmtDate(p.vencimento)}</td>
+            <td><span class="badge ${p.status === 'pago' ? 'ok' : atraso ? 'erro' : 'alerta'}">${p.status === 'pago' ? 'Pago' : atraso ? 'Em atraso' : 'Pendente'}</span></td>
+            <td>${fmtDate(p.pago_em)}</td><td>${esc(p.forma || '—')}</td>
+            <td class="num acoes-cobranca">${(() => { const z = p.status === 'pendente' && linkCobrancaWhatsApp({ valor: p.valor, vencimento: p.vencimento, aula: p.matriculas?.aulas?.nome }, aluno); return z ? `<a class="btn pequeno whats" href="${esc(z)}" target="_blank" rel="noopener" title="Enviar a cobrança pelo WhatsApp">${ICONE_WHATSAPP}Cobrar</a> ` : ''; })()}${p.status === 'pendente' ? `<button class="btn pequeno" type="button" data-pagar="${p.id}">Registrar pagamento</button>` : ''}</td></tr>`;
+        }).join('')}</tbody></table></div>`;
   const totalPago = pags.filter((p) => p.status === 'pago').reduce((t, p) => t + Number(p.valor), 0);
 
   el.innerHTML = `
@@ -483,18 +495,13 @@ export async function renderFicha(el, id, { navegar }) {
     </section>` : ''}
 
     <section class="card">
-      <h2>Histórico de pagamentos ${pendentes.length ? `<span class="badge alerta">${pendentes.length} pendente(s)</span>` : ''}</h2>
-      ${pags.length ? `<div class="tabela-wrap"><table>
-        <thead><tr><th>Referência</th><th>Aula</th><th>Plano</th><th class="num">Valor</th><th>Vencimento</th><th>Situação</th><th>Pago em</th><th>Forma</th><th></th></tr></thead>
-        <tbody>${pags.map((p) => {
-          const atraso = p.status === 'pendente' && p.vencimento < hoje;
-          return `<tr>
-            <td>${fmtMes(p.competencia)}</td><td>${esc(p.matriculas?.aulas?.nome)}</td><td>${planoLabel(p.plano)}</td>
-            <td class="num">${money(p.valor)}</td><td>${fmtDate(p.vencimento)}</td>
-            <td><span class="badge ${p.status === 'pago' ? 'ok' : atraso ? 'erro' : 'alerta'}">${p.status === 'pago' ? 'Pago' : atraso ? 'Em atraso' : 'Pendente'}</span></td>
-            <td>${fmtDate(p.pago_em)}</td><td>${esc(p.forma || '—')}</td>
-            <td class="num acoes-cobranca">${(() => { const z = p.status === 'pendente' && linkCobrancaWhatsApp({ valor: p.valor, vencimento: p.vencimento, aula: p.matriculas?.aulas?.nome }, aluno); return z ? `<a class="btn pequeno whats" href="${esc(z)}" target="_blank" rel="noopener" title="Enviar a cobrança pelo WhatsApp">${ICONE_WHATSAPP}Cobrar</a> ` : ''; })()}${p.status === 'pendente' ? `<button class="btn pequeno" type="button" data-pagar="${p.id}">Registrar pagamento</button>` : ''}</td></tr>`;
-        }).join('')}</tbody></table></div>` : vazio('Nenhum pagamento gerado ainda.')}
+      <h2>Mensalidades em aberto ${pendentes.length ? `<span class="badge alerta">${pendentes.length}</span>` : ''}</h2>
+      ${pendentes.length ? tabelaPags(pendentes) : '<p class="sub" style="margin:0">Nenhuma mensalidade em aberto.</p>'}
+      ${historico.length ? `
+      <details class="recolhe historico-pag">
+        <summary><h3>Histórico de pagamentos <span class="badge cinza">${historico.length}</span></h3></summary>
+        ${tabelaPags(historico)}
+      </details>` : ''}
     </section>
 
     ${matsEncerradas.length ? `
