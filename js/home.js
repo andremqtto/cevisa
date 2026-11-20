@@ -56,7 +56,7 @@ function desenhar(el, aulas, ctx) {
       ${isGestor ? '<button class="nova-aula" data-nova type="button">＋ Nova aula</button>' : ''}
     </div>
     ${!aulas.length && !isGestor ? vazio('Em breve, novas aulas por aqui.') : ''}
-    ${!isGestor && !ctx.alunos ? '<p class="sub" style="margin-top:28px">Para se inscrever, procure a recepção do Spa Médico Adventista Cevisa ou entre no app.</p>' : ''}`;
+    ${!isGestor && !ctx.alunos ? '<p class="sub" style="margin-top:28px">Para se inscrever, procure a recepção do Spa Médico Adventista Cevisa ou nos chame no WhatsApp clicando no botão verde ao lado.</p>' : ''}`;
 
   el.onclick = async (e) => {
     const pedir = e.target.closest('[data-pedir]');
