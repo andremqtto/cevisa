@@ -6,7 +6,7 @@ import { codigoPix, qrSVG } from './pix.js';
 import {
   esc, money, fmtDate, planoLabel, PLANOS, hojeISO, diasEntre, abrirModal, toast, comBotao, carregando, vazio, erroBox,
   fmtMes, fmtMesLongo, primeiroDiaMes,
-  horariosHTML, precoVinculo, moneyOuIsento, VINCULOS, ICONE_WHATSAPP,
+  horariosHTML, precoVinculo, moneyOuIsento, VINCULOS, ICONE_WHATSAPP, camposDependente, lerDependente,
 } from './ui.js';
 
 // Nome de quem faz as aulas (dependente) ou, se for o próprio responsável, o nome do cadastro.
@@ -105,7 +105,7 @@ export async function renderPainelAluno(el) {
     <section class="card familia">
       <ul class="familia-lista">${alunos.map((a) => `
         <li><div class="familia-item">${avatarHTML(a.foto, quem(a), 40)}
-          <div><strong>${esc(quem(a))}</strong><small class="sub">${quem(a) === a.nome ? 'você' : 'dependente'} · ${a.matriculas.length ? `${a.matriculas.length} aula(s)` : 'sem aulas'}</small></div></div></li>`).join('')}</ul>
+          <div><strong>${esc(quem(a))}</strong><small class="sub">${quem(a) === a.nome && !a.dependente ? 'você' : esc(a.parentesco || 'dependente')} · ${a.matriculas.length ? `${a.matriculas.length} aula(s)` : 'sem aulas'}</small></div></div></li>`).join('')}</ul>
       <p class="sub" style="margin:10px 0 12px">Vai inscrever um filho ou outro dependente? Cadastre aqui: cada um tem a própria ficha e turma, e você paga tudo junto neste painel.</p>
       <button class="btn sec" type="button" id="add-dependente">＋ Adicionar dependente</button>
     </section>` : ''}`;
@@ -142,6 +142,7 @@ function adicionarDependente() {
       <form id="f-dep" novalidate>
         <label class="campo"><span>Nome completo do dependente *</span><input type="text" name="nome" maxlength="120" autocomplete="off" required></label>
         <label class="campo"><span>Data de nascimento *</span><input type="date" name="nasc" max="${hojeISO()}" required></label>
+        ${camposDependente()}
         <small class="sub">Depois de adicionar, o app pede a foto e o questionário de saúde (PAR-Q) do dependente.</small>
         <div id="dep-erro"></div>
         <div class="acoes">
@@ -157,10 +158,14 @@ function adicionarDependente() {
     e.preventDefault();
     if (!form.nome.value.trim()) return erro('Informe o nome completo do dependente.');
     if (!form.nasc.value) return erro('Informe a data de nascimento.');
+    let dep;
+    try { dep = lerDependente(form); } catch (err) { return erro(err.message); }
     erro('');
     await comBotao(form.querySelector('[type=submit]'), async () => {
       try {
-        ok(await sb.rpc('adicionar_dependente', { p_base: null, p_nome: form.nome.value.trim(), p_nascimento: form.nasc.value }));
+        ok(await sb.rpc('adicionar_dependente', {
+          p_base: null, p_nome: form.nome.value.trim(), p_nascimento: form.nasc.value, p_sexo: dep.sexo, p_parentesco: dep.parentesco,
+        }));
         m.fechar();
         toast('Dependente adicionado. Agora envie a foto e responda o PAR-Q.');
         setTimeout(() => location.reload(), 900); // o app abre a etapa de foto e PAR-Q do dependente
@@ -320,8 +325,9 @@ function enviarComprovante(alunos) {
 
 function cartaoAula(aluno, m, item, varios, hoje) {
   const espera = m.status === 'espera';
+  const reserva = !espera && !!m.reserva;
   let pagoAte = '';
-  if (!espera) {
+  if (!espera && !reserva) {
     const d = diasEntre(hoje, m.data_fim);
     pagoAte = `${fmtDate(m.data_fim)} ${d < 0 ? '<span class="badge erro">vencido</span>' : d <= 7 ? '<span class="badge alerta">vence logo</span>' : ''}`;
   }
@@ -329,7 +335,7 @@ function cartaoAula(aluno, m, item, varios, hoje) {
     <article class="minha-aula">
       <header>
         <h3>${esc(m.aula)}</h3>
-        ${espera ? '<span class="badge alerta">Lista de espera</span>' : `<span class="badge">${planoLabel(m.plano)}</span>`}
+        ${espera ? '<span class="badge alerta">Lista de espera</span>' : reserva ? '<span class="badge alerta">Reserva de vaga</span>' : `<span class="badge">${planoLabel(m.plano)}</span>`}
       </header>
       ${m.turma ? `<p class="sub" style="margin:0">Turma: <strong>${esc(m.turma)}</strong></p>` : ''}
       ${varios || quem(aluno) !== aluno.nome ? `<p class="sub com-avatar" style="margin:0">${avatarHTML(aluno.foto, quem(aluno), 28)}<span>Aluno(a): <strong>${esc(quem(aluno))}</strong></span></p>` : ''}
@@ -338,7 +344,9 @@ function cartaoAula(aluno, m, item, varios, hoje) {
         ${espera ? '<div><dt>Situação</dt><dd>Aguardando vaga</dd></div>' : `
           <div><dt>Valor do plano</dt><dd>${m.preco === null ? 'a combinar' : moneyOuIsento(m.preco)}</dd></div>
           ${item?.valor !== null && item && Number(item.valor) !== Number(m.preco) ? `<div><dt>Próxima cobrança</dt><dd>${money(item.valor)}</dd></div>` : ''}
-          <div><dt>Pago até</dt><dd>${pagoAte}</dd></div>
+          ${reserva ? `<div><dt>Plano</dt><dd>${planoLabel(m.plano)}</dd></div>
+          <div><dt>Situação</dt><dd>Vaga reservada · confirma após o pagamento</dd></div>`
+            : `<div><dt>Pago até</dt><dd>${pagoAte}</dd></div>`}
           ${m.trancados?.length ? `<div><dt>Meses trancados</dt><dd>${m.trancados.map(fmtMes).join(', ')}</dd></div>` : ''}`}
       </dl>
       ${m.grupo ? `<a class="btn whats pequeno grupo-btn" href="${esc(m.grupo)}" target="_blank" rel="noopener" data-grupo="${m.id}">${ICONE_WHATSAPP}Grupo da turma no WhatsApp</a>` : ''}
@@ -451,7 +459,8 @@ function pedirTrancamento(m, aoConcluir) {
 
 // ------------------------------------------------------------------ pedido de inscrição
 /**
- * Aluno escolhe a turma e o plano e pede inscrição; o gestor/admin recebe uma notificação e conclui a inscrição.
+ * Aluno escolhe a turma e o plano e se inscreve: a vaga fica reservada (com a cobrança) até a recepção
+ * registrar o pagamento. O gestor/admin recebe uma notificação.
  * turmas: turmas_publicas desta aula. Turmas sem vaga ficam cinza e não podem ser escolhidas,
  * a não ser que TODAS estejam cheias (aí o pedido é para a lista de espera).
  */
@@ -510,11 +519,11 @@ export function abrirPedidoInscricao(aula, turmas, alunos, aoConcluir) {
           <div id="pd-planos" style="display:grid;gap:8px">${planosHTML(livres[0]?.id)}</div>
         </fieldset>
         <label class="campo"><span>Observação (opcional)</span><textarea name="obs" maxlength="300" placeholder="Ex.: tenho uma lesão no joelho"></textarea></label>
-        ${fila ? '' : '<div class="aviso info">A recepção vai receber seu pedido e confirmar a inscrição. Depois disso, o valor aparece no seu painel.</div>'}
+        ${fila ? '' : '<div class="aviso info">Sua vaga fica <strong>reservada</strong> na hora e o valor aparece no seu painel. A inscrição é confirmada quando a recepção registrar o pagamento.</div>'}
         <div id="pd-erro"></div>
         <div class="acoes">
           <button class="btn sec" type="button" data-cancelar>Cancelar</button>
-          <button class="btn ${fila ? 'amarelo' : ''}" type="submit">${fila ? 'Entrar na fila de espera' : 'Enviar pedido'}</button>
+          <button class="btn ${fila ? 'amarelo' : ''}" type="submit">${fila ? 'Entrar na fila de espera' : 'Reservar vaga'}</button>
         </div>
       </form>`,
   });
@@ -537,7 +546,7 @@ export function abrirPedidoInscricao(aula, turmas, alunos, aoConcluir) {
           p_aluno: form.aluno.value, p_aula: aula.id, p_plano: form.plano.value, p_obs: form.obs.value, p_turma: turma,
         }));
         m.fechar();
-        toast(fila ? 'Pedido enviado! Você será avisado quando abrir uma vaga.' : 'Pedido enviado! A recepção vai confirmar sua inscrição.');
+        toast(fila ? 'Você entrou na lista de espera! A recepção avisa quando abrir uma vaga.' : 'Vaga reservada! Faça o pagamento para confirmar a inscrição.');
         aoConcluir();
       } catch (err) {
         m.el.querySelector('#pd-erro').innerHTML = `<div class="aviso erro">${esc(err.message)}</div>`;

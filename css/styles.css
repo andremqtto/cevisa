@@ -746,3 +746,9 @@ a.familia-item:hover { border-color: var(--azul); }
 .familia-item strong { display: block; }
 .familia-item small { display: block; }
 .minhas-aulas + .secao-titulo, .card + .secao-titulo { margin-top: 26px; }
+
+/* Endereço preenchido pelo CEP */
+fieldset.endereco { border: 1.5px solid var(--borda); border-radius: 12px; padding: 10px 12px 4px; margin: 0 0 14px; min-width: 0; }
+fieldset.endereco legend { font-weight: 600; font-size: 14px; padding: 0 4px; }
+fieldset.endereco [data-cep-status].ok { color: var(--verde, #1a7f4b); }
+fieldset.endereco [data-cep-status].erro { color: var(--vermelho, #b42318); }

@@ -382,3 +382,121 @@ export function horariosHTML(texto) {
 export const carregando = (txt = 'Carregando…') => `<div class="carregando"><span class="spinner"></span>${esc(txt)}</div>`;
 export const vazio = (txt) => `<p class="vazio">${esc(txt)}</p>`;
 export const erroBox = (e) => `<div class="aviso erro">${esc(e.message || e)}</div>`;
+
+// ------------------------------------------------------------------ endereço (preenchido pelo CEP)
+const UFS = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'];
+
+/**
+ * Campos de endereço: começa pelo CEP, que preenche rua, bairro, cidade e estado.
+ * Sem CEP, a pessoa preenche tudo à mão. det = endereco_detalhe já salvo (para editar).
+ */
+export function camposEndereco(det = {}, { obrigatorio = true, atual = '' } = {}) {
+  const d = det || {};
+  const ast = obrigatorio ? ' *' : '';
+  return `
+    <fieldset class="endereco">
+      <legend>Endereço${obrigatorio ? ' completo *' : ''}</legend>
+      ${!d.logradouro && atual ? `<p class="sub" style="margin:0 0 10px">Endereço atual: ${esc(atual)}. Preencha abaixo para atualizar.</p>` : ''}
+      <label class="campo"><span>CEP</span>
+        <input type="text" name="end_cep" inputmode="numeric" autocomplete="postal-code" maxlength="9" placeholder="00000-000" value="${esc(d.cep || '')}">
+        <small data-cep-status>Digite o CEP para preencher o endereço automaticamente. Não sabe? Preencha os campos abaixo.</small></label>
+      <label class="campo"><span>Rua / avenida${ast}</span>
+        <input type="text" name="end_logradouro" maxlength="150" autocomplete="address-line1" value="${esc(d.logradouro || '')}"></label>
+      <div class="grade2">
+        <label class="campo"><span>Número${ast}</span>
+          <input type="text" name="end_numero" maxlength="20" placeholder="Ex.: 123 ou s/n" value="${esc(d.numero || '')}"></label>
+        <label class="campo"><span>Complemento</span>
+          <input type="text" name="end_complemento" maxlength="80" autocomplete="address-line2" placeholder="Apto, bloco, casa…" value="${esc(d.complemento || '')}"></label>
+      </div>
+      <label class="campo"><span>Bairro${ast}</span>
+        <input type="text" name="end_bairro" maxlength="80" value="${esc(d.bairro || '')}"></label>
+      <div class="grade2">
+        <label class="campo"><span>Cidade${ast}</span>
+          <input type="text" name="end_cidade" maxlength="80" autocomplete="address-level2" value="${esc(d.cidade || '')}"></label>
+        <label class="campo"><span>Estado (UF)${ast}</span>
+          <select name="end_uf" autocomplete="address-level1"><option value="">Selecione</option>${UFS.map((u) => `<option ${u === d.uf ? 'selected' : ''}>${u}</option>`).join('')}</select></label>
+      </div>
+    </fieldset>`;
+}
+
+/** Máscara do CEP e busca automática do endereço (ViaCEP). */
+export function ligarEndereco(form) {
+  const cep = form.end_cep;
+  if (!cep) return;
+  const status = form.querySelector('[data-cep-status]');
+  const msg = (t, cls = '') => { status.textContent = t; status.className = cls; };
+  let ultimo = '';
+  cep.addEventListener('input', async () => {
+    const n = cep.value.replace(/\D/g, '').slice(0, 8);
+    cep.value = n.length > 5 ? `${n.slice(0, 5)}-${n.slice(5)}` : n;
+    if (n.length !== 8 || n === ultimo) return;
+    ultimo = n;
+    msg('Buscando endereço…');
+    try {
+      const r = await fetch(`https://viacep.com.br/ws/${n}/json/`);
+      const j = await r.json();
+      if (!r.ok || j.erro) throw new Error('nao achou');
+      if (cep.value.replace(/\D/g, '') !== n) return; // a pessoa já mudou o CEP
+      const por = (campo, valor) => { if (valor) form[campo].value = valor; };
+      por('end_logradouro', j.logradouro);
+      por('end_bairro', j.bairro);
+      por('end_cidade', j.localidade);
+      por('end_uf', j.uf);
+      msg(j.logradouro ? 'Endereço encontrado. Confira e informe o número.' : 'CEP da cidade inteira: preencha a rua e o bairro.', 'ok');
+      (j.logradouro ? form.end_numero : form.end_logradouro).focus();
+    } catch {
+      ultimo = '';
+      msg('CEP não encontrado. Confira o número ou preencha o endereço abaixo.', 'erro');
+    }
+  });
+}
+
+/**
+ * Lê o endereço do formulário. Devolve null se tudo estiver vazio (e não for obrigatório).
+ * Lança erro com a mensagem para a pessoa se faltar algum campo.
+ */
+export function lerEndereco(form, { obrigatorio = true } = {}) {
+  const v = (n) => (form[n]?.value || '').trim();
+  const d = {
+    cep: v('end_cep').replace(/\D/g, ''), logradouro: v('end_logradouro'), numero: v('end_numero'),
+    complemento: v('end_complemento'), bairro: v('end_bairro'), cidade: v('end_cidade'), uf: v('end_uf'),
+  };
+  if (!obrigatorio && !Object.values(d).some(Boolean)) return null;
+  if (d.cep && d.cep.length !== 8) throw new Error('CEP inválido: use 8 números (ou deixe em branco).');
+  const falta = [['logradouro', 'rua'], ['numero', 'número'], ['bairro', 'bairro'], ['cidade', 'cidade'], ['uf', 'estado']]
+    .filter(([k]) => !d[k]).map(([, n]) => n);
+  if (falta.length) throw new Error(`Preencha o endereço completo: falta ${falta.join(', ').replace(/, ([^,]*)$/, ' e $1')}.`);
+  return d;
+}
+
+/** Parâmetros da função definir_endereco. */
+export const argsEndereco = (alunoId, d) => ({
+  p_aluno: alunoId, p_cep: d.cep || null, p_logradouro: d.logradouro, p_numero: d.numero,
+  p_complemento: d.complemento || null, p_bairro: d.bairro, p_cidade: d.cidade, p_uf: d.uf,
+});
+
+// ------------------------------------------------------------------ dependente: sexo e parentesco
+export const PARENTESCOS = ['Filho(a)', 'Enteado(a)', 'Neto(a)', 'Sobrinho(a)', 'Irmão(ã)', 'Cônjuge', 'Pai / Mãe', 'Avô / Avó', 'Tutelado(a)', 'Outro'];
+export const SEXOS = { F: 'Feminino', M: 'Masculino' };
+
+/** Campos de sexo e grau de parentesco do dependente (modal "Adicionar dependente"). */
+export function camposDependente() {
+  return `
+    <div class="grade2">
+      <label class="campo"><span>Sexo *</span>
+        <select name="sexo" required><option value="">Selecione…</option>
+          ${Object.entries(SEXOS).map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select></label>
+      <label class="campo"><span>Parentesco (o dependente é seu…) *</span>
+        <select name="parentesco" required><option value="">Selecione…</option>
+          ${PARENTESCOS.map((p) => `<option>${esc(p)}</option>`).join('')}</select></label>
+    </div>`;
+}
+
+/** Lê sexo e parentesco; lança erro se faltar algum. */
+export function lerDependente(form) {
+  const sexo = form.querySelector('[name=sexo]').value;
+  const parentesco = form.querySelector('[name=parentesco]').value;
+  if (!sexo) throw new Error('Informe o sexo do dependente.');
+  if (!parentesco) throw new Error('Informe o grau de parentesco com o dependente.');
+  return { sexo, parentesco };
+}

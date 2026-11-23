@@ -5,6 +5,7 @@ import {
   confirmar, comBotao, carregando, vazio, erroBox, mostrarCredenciais, linkWhatsAppPara, ICONE_WHATSAPP, linkCobrancaWhatsApp,
   nomeParticipante, camposParticipante, ligarParticipante, lerParticipante,
   VINCULOS, vinculoPreco, precoVinculo, moneyOuIsento, camposVinculo,
+  camposEndereco, ligarEndereco, lerEndereco, argsEndereco, camposDependente, lerDependente, SEXOS,
 } from './ui.js';
 import { registrarPagamento, confirmarPagamentoInformado } from './financeiro.js';
 import { avatarHTML, ativarFotos, salvarFoto } from './fotos.js';
@@ -232,7 +233,7 @@ function excluirAluno(aluno, mats, aoExcluir) {
     largura: 460,
     corpo: `
       <form id="f-excluir" novalidate>
-        <div class="aviso erro" style="margin-top:0">Você vai excluir <strong>${esc(aluno.nome)}</strong> para sempre.</div>
+        <div class="aviso erro" style="margin-top:0">Você vai excluir <strong>${esc(nomeParticipante(aluno))}</strong> para sempre.</div>
         <ul style="margin:0 0 14px;padding-left:20px">
           <li>Ficha e dados pessoais</li>
           <li>${mats.length} matrícula(s)${ativas ? ` — ${ativas} vaga(s) será(ão) liberada(s) para a lista de espera` : ''}</li>
@@ -259,7 +260,7 @@ function excluirAluno(aluno, mats, aoExcluir) {
       try {
         ok(await sb.rpc('excluir_aluno', { p_aluno: aluno.id }));
         m.fechar();
-        toast(`${aluno.nome} foi excluído(a).`);
+        toast(`${nomeParticipante(aluno)} foi excluído(a).`);
         aoExcluir();
       } catch (err) {
         m.el.querySelector('#ex-erro').innerHTML = `<div class="aviso erro">${esc(err.message)}</div>`;
@@ -286,7 +287,7 @@ export function editarAluno(aluno, aoSalvar) {
         </div>
         ${camposParticipante(a)}
         ${camposVinculo(a.vinculo || 'externo', { gestor: true })}
-        <label class="campo"><span>Endereço</span><input type="text" name="endereco" maxlength="200" value="${esc(a.endereco)}"></label>
+        ${camposEndereco(a.endereco_detalhe, { obrigatorio: false, atual: a.endereco })}
         <label class="campo"><span>Observações</span><textarea name="observacoes" maxlength="800">${esc(a.observacoes)}</textarea></label>
         <div id="a-erro"></div>
         <div class="acoes">
@@ -299,6 +300,7 @@ export function editarAluno(aluno, aoSalvar) {
   const erro = (t) => { m.el.querySelector('#a-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
   m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
   ligarParticipante(form);
+  ligarEndereco(form);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const nome = form.nome.value.trim();
@@ -307,11 +309,13 @@ export function editarAluno(aluno, aoSalvar) {
     if (email && !/^\S+@\S+\.\S+$/.test(email)) return erro('E-mail inválido.');
     let part;
     try { part = lerParticipante(form); } catch (err) { return erro(err.message); }
+    let endereco;
+    try { endereco = lerEndereco(form, { obrigatorio: false }); } catch (err) { return erro(err.message); }
     erro('');
     const v = (n) => form[n].value.trim() || null;
     const dados = {
       nome, cpf: v('cpf'), data_nascimento: form.data_nascimento.value || null, telefone: v('telefone'),
-      email: email || null, endereco: v('endereco'), observacoes: v('observacoes'),
+      email: email || null, observacoes: v('observacoes'),
       participante_proprio: part.proprio, participante_nome: part.nome, participante_nascimento: part.nascimento,
     };
     await comBotao(form.querySelector('[type=submit]'), async () => {
@@ -319,6 +323,7 @@ export function editarAluno(aluno, aoSalvar) {
         let salvo = novo
           ? ok(await sb.from('alunos').insert(dados).select().single())
           : ok(await sb.from('alunos').update(dados).eq('id', a.id).select().single());
+        if (endereco) salvo = { ...salvo, endereco: ok(await sb.rpc('definir_endereco', argsEndereco(salvo.id, endereco))) };
         // vínculo (ou quem faz as aulas) mudou: grava pela função, que também recalcula as cobranças pendentes
         const vinculo = form.querySelector('[name=vinculo]:checked')?.value || 'externo';
         if (vinculo !== (salvo.vinculo || 'externo') || (!novo && part.proprio !== (a.participante_proprio !== false))) {
@@ -344,6 +349,8 @@ export async function renderFicha(el, id, { navegar }) {
       .eq('aluno_id', id).order('created_at', { ascending: false }));
     pags = ok(await sb.from('pagamentos').select('*, matriculas(aulas(nome))')
       .eq('aluno_id', id).order('vencimento', { ascending: false }));
+    // reserva de vaga: inscrito, mas nenhum pagamento da matrícula registrado ainda
+    mats.forEach((m) => { m.reserva = m.status === 'ativa' && !pags.some((p) => p.matricula_id === m.id && p.status === 'pago'); });
     // pedidos de inscrição feitos pelo aluno no app (ignora erro se o banco ainda não tiver a tabela)
     const rp = await sb.from('solicitacoes_inscricao').select('id,aula_id,turma_id,plano,observacao,created_at,aulas(nome),turmas(nome)')
       .eq('aluno_id', id).eq('status', 'pendente').order('created_at');
@@ -415,8 +422,8 @@ export async function renderFicha(el, id, { navegar }) {
           <label class="link-foto no-print"><input type="file" accept="image/*" id="trocar-foto" hidden>${aluno.foto ? 'Trocar foto' : 'Adicionar foto'}</label>
         </div>
         <div>
-        <h1>${esc(aluno.nome)} <span class="badge ${aluno.ativo ? 'ok' : 'cinza'}" style="vertical-align:middle">${aluno.ativo ? 'Ativo' : 'Desativado'}</span>${aluno.vinculo && aluno.vinculo !== 'externo' ? ` <span class="badge info" style="vertical-align:middle">${VINCULOS[aluno.vinculo].nome}${vinculoPreco(aluno) === 'externo' ? ' · dependente paga preço normal' : ''}</span>` : ''}</h1>
-        ${nomeParticipante(aluno) !== aluno.nome ? `<p class="participante-linha">Faz as aulas: <strong>${esc(nomeParticipante(aluno))}</strong> · ${esc(aluno.nome)} é o(a) responsável</p>` : ''}
+        <h1>${esc(nomeParticipante(aluno))} <span class="badge ${aluno.ativo ? 'ok' : 'cinza'}" style="vertical-align:middle">${aluno.ativo ? 'Ativo' : 'Desativado'}</span>${aluno.vinculo && aluno.vinculo !== 'externo' ? ` <span class="badge info" style="vertical-align:middle">${VINCULOS[aluno.vinculo].nome}${vinculoPreco(aluno) === 'externo' ? ' · dependente paga preço normal' : ''}</span>` : ''}</h1>
+        ${nomeParticipante(aluno) !== aluno.nome ? `<p class="participante-linha">${aluno.responsavel_id ? `Dependente${aluno.parentesco ? ` (${esc(aluno.parentesco.toLowerCase())})` : ''} de` : 'Responsável:'} <strong>${aluno.responsavel_id ? `<a href="#/alunos/${aluno.responsavel_id}">${esc(aluno.nome)}</a>` : esc(aluno.nome)}</strong> · cobranças e acesso ao app ficam com o responsável</p>` : ''}
         <p class="sub"><span class="badge ${s.cls}">${s.txt}</span> · cliente desde ${fmtDate((aluno.created_at || '').slice(0, 10))} · total pago ${money(totalPago)}
           · ${aluno.user_id && aluno.cadastro_completo === false ? '<span class="badge alerta">Aguardando 1º acesso do aluno</span>' : aluno.user_id ? '<span class="badge ok">Acesso ao app ativo</span>' : aluno.email ? '<span class="badge cinza">Ainda não acessou o app</span>' : '<span class="badge alerta">Sem e-mail: cadastre um para liberar o app</span>'}</p>
         </div>
@@ -479,6 +486,7 @@ export async function renderFicha(el, id, { navegar }) {
         ${dado('Quem faz as aulas', aluno.participante_proprio === false
           ? `${nomeParticipante(aluno)}${aluno.participante_nascimento ? ` (nasc. ${fmtDate(aluno.participante_nascimento)})` : ''}`
           : 'O próprio responsável')}
+        ${aluno.responsavel_id ? dado('Dependente', [aluno.parentesco, SEXOS[aluno.sexo]].filter(Boolean).join(' · ') || '—') : ''}
         ${aluno.responsavel ? dado('Responsável (cadastro antigo)', aluno.responsavel) : ''}
         <div><dt>Vínculo com o Cevisa</dt><dd>${vinculoHTML(aluno)}</dd></div>
         <div><dt>Termo de privacidade (LGPD)</dt><dd>${aluno.termo_aceito_em ? `<span class="badge ok">Aceito</span> em ${fmtDate(aluno.termo_aceito_em.slice(0, 10))}${aluno.termo_versao ? ` · versão ${esc(aluno.termo_versao)}` : ''}` : aluno.user_id ? '<span class="badge alerta">Pendente</span> será pedido no próximo acesso' : '<span class="badge cinza">Sem acesso ao app</span> colher a autorização em papel'}</dd></div>
@@ -497,7 +505,7 @@ export async function renderFicha(el, id, { navegar }) {
         <li>${x.id === id ? '<div class="familia-item atual">' : `<a class="familia-item" href="#/alunos/${x.id}">`}
           ${avatarHTML(x.foto, x.participante, 40)}
           <div><strong>${esc(x.participante)}</strong>
-            <small class="sub">${x.participante === x.nome ? 'responsável' : `dependente · resp.: ${esc(x.nome)}`} · ${x.aulas ? `${x.aulas} aula(s)` : 'sem aulas'}${x.ativo ? '' : ' · desativado'}${x.id === id ? ' · esta ficha' : ''}</small></div>
+            <small class="sub">${x.principal ? 'responsável' : `${esc(x.parentesco || 'dependente')} · resp.: ${esc(x.nome)}`} · ${x.aulas ? `${x.aulas} aula(s)` : 'sem aulas'}${x.ativo ? '' : ' · desativado'}${x.id === id ? ' · esta ficha' : ''}</small></div>
         ${x.id === id ? '</div>' : '</a>'}</li>`).join('')}</ul>
         <p class="sub" style="margin:10px 0 0">As cobranças de todos vão para o responsável, que vê e paga tudo junto no app.</p>`
       : '<p class="sub" style="margin:0">Para inscrever filhos ou outros dependentes deste responsável, use “Adicionar dependente”: cada um ganha a própria ficha (foto, PAR-Q e turma), e as cobranças vão para o responsável.</p>'}
@@ -618,7 +626,7 @@ export async function renderFicha(el, id, { navegar }) {
   el.querySelector('#alternar').onclick = async (e) => {
     const botao = e.currentTarget;
     const novoEstado = !aluno.ativo;
-    if (!novoEstado && !(await confirmar(`Desativar ${aluno.nome}? As matrículas continuam registradas, mas o aluno fica marcado como inativo.`, { titulo: 'Desativar aluno', confirmarTexto: 'Desativar', perigo: true }))) return;
+    if (!novoEstado && !(await confirmar(`Desativar ${nomeParticipante(aluno)}? As matrículas continuam registradas, mas o aluno fica marcado como inativo.`, { titulo: 'Desativar aluno', confirmarTexto: 'Desativar', perigo: true }))) return;
     await comBotao(botao, async () => {
       ok(await sb.from('alunos').update({ ativo: novoEstado }).eq('id', id));
       toast(novoEstado ? 'Aluno ativado.' : 'Aluno desativado.');
@@ -680,8 +688,8 @@ export async function renderFicha(el, id, { navegar }) {
     if (encerrar) {
       const m = mats.find((x) => x.id === encerrar.dataset.encerrar);
       const msg = m.status === 'espera'
-        ? `Tirar ${aluno.nome} da lista de espera de ${m.aulas.nome}?`
-        : `Encerrar a matrícula de ${aluno.nome} em ${m.aulas.nome}? A vaga será liberada e o próximo da lista de espera será chamado.`;
+        ? `Tirar ${nomeParticipante(aluno)} da lista de espera de ${m.aulas.nome}?`
+        : `Encerrar a matrícula de ${nomeParticipante(aluno)} em ${m.aulas.nome}? A vaga será liberada e o próximo da lista de espera será chamado.`;
       if (!(await confirmar(msg, { titulo: 'Encerrar matrícula', confirmarTexto: 'Encerrar', perigo: true }))) return;
       await comBotao(encerrar, async () => {
         ok(await sb.rpc('encerrar_matricula', { p_matricula: m.id }));
@@ -693,7 +701,8 @@ export async function renderFicha(el, id, { navegar }) {
 }
 
 function linhaMatricula(m, posicao, hoje, turmas = []) {
-  const st = m.status === 'ativa' ? '<span class="badge ok">Ativa</span>'
+  const st = m.reserva ? '<span class="badge alerta" title="Inscrito, aguardando o primeiro pagamento ser registrado">Reserva de vaga</span>'
+    : m.status === 'ativa' ? '<span class="badge ok">Ativa</span>'
     : m.status === 'espera' ? `<span class="badge alerta">Lista de espera · ${posicao}º</span>`
     : '<span class="badge cinza">Encerrada</span>';
   const trancados = [...(m.trancamentos || [])].sort((a, b) => a.mes.localeCompare(b.mes));
@@ -701,7 +710,8 @@ function linhaMatricula(m, posicao, hoje, turmas = []) {
   const chips = trancados.length
     ? `<div class="chips">${trancados.map((t) => `<span class="chip">${fmtMes(t.mes)}${t.mes >= futuro && m.status === 'ativa' ? `<button type="button" title="Desfazer trancamento" data-destrancar="${t.id}">×</button>` : ''}</span>`).join('')}</div>` : '—';
   let pagoAte = '—';
-  if (m.status === 'ativa') {
+  if (m.reserva) pagoAte = '<small class="sub">aguardando pagamento</small>';
+  else if (m.status === 'ativa') {
     const atraso = m.data_fim < hoje;
     pagoAte = `${fmtDate(m.data_fim)}${atraso ? ' <span class="badge erro">vencido</span>' : ''}`;
   }
@@ -853,7 +863,7 @@ async function inscrever(aluno, mats, aoConcluir, preset = {}) {
         const r = ok(await sb.rpc('inscrever_aluno', args));
         m.fechar();
         toast(r.status === 'espera'
-          ? `Turma cheia: ${aluno.nome} entrou na lista de espera (posição ${r.posicao_espera}).`
+          ? `Turma cheia: ${nomeParticipante(aluno)} entrou na lista de espera (posição ${r.posicao_espera}).`
           : 'Aluno inscrito. A cobrança foi gerada — registre o pagamento quando receber.');
         aoConcluir();
       } catch (err) { erro(err.message); }
@@ -871,6 +881,7 @@ function adicionarDependente(aluno, aoConcluir) {
       <form id="f-dep" novalidate>
         <label class="campo"><span>Nome completo do dependente *</span><input type="text" name="nome" maxlength="120" required></label>
         <label class="campo"><span>Data de nascimento</span><input type="date" name="nasc" max="${hojeISO()}"></label>
+        ${camposDependente()}
         <small class="sub">A foto e o questionário de saúde (PAR-Q) do dependente serão pedidos ao responsável no próximo acesso ao app.</small>
         <div id="dep-erro"></div>
         <div class="acoes">
@@ -885,10 +896,15 @@ function adicionarDependente(aluno, aoConcluir) {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!form.nome.value.trim()) return erro('Informe o nome completo do dependente.');
+    let dep;
+    try { dep = lerDependente(form); } catch (err) { return erro(err.message); }
     erro('');
     await comBotao(form.querySelector('[type=submit]'), async () => {
       try {
-        const novo = ok(await sb.rpc('adicionar_dependente', { p_base: aluno.id, p_nome: form.nome.value.trim(), p_nascimento: form.nasc.value || null }));
+        const novo = ok(await sb.rpc('adicionar_dependente', {
+          p_base: aluno.id, p_nome: form.nome.value.trim(), p_nascimento: form.nasc.value || null,
+          p_sexo: dep.sexo, p_parentesco: dep.parentesco,
+        }));
         m.fechar();
         toast(`${form.nome.value.trim()} cadastrado(a). Agora inscreva nas aulas.`);
         aoConcluir(novo);

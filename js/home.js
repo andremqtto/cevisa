@@ -104,7 +104,7 @@ function inscricaoAluno(a, turmas, alunos) {
   if (!alunos?.length) return '';
   const estados = alunos.map((al) => {
     const m = al.matriculas.find((x) => x.aula_id === a.id);
-    if (m) return m.status === 'espera' ? 'espera' : 'inscrito';
+    if (m) return m.status === 'espera' ? 'espera' : m.reserva ? 'reserva' : 'inscrito';
     return al.solicitacoes?.some((s) => s.aula_id === a.id) ? 'pedido' : 'livre';
   });
   if (estados.includes('livre')) {
@@ -112,7 +112,7 @@ function inscricaoAluno(a, turmas, alunos) {
       ? `<button class="btn amarelo largo" type="button" data-pedir="${a.id}">Fila de espera</button>`
       : `<button class="btn largo" type="button" data-pedir="${a.id}">Fazer inscrição</button>`;
   }
-  const selo = { inscrito: ['ok', 'Você está inscrito(a)'], espera: ['alerta', 'Você está na lista de espera'], pedido: ['alerta', 'Pedido enviado · aguardando a recepção'] }[estados[0]];
+  const selo = { inscrito: ['ok', 'Você está inscrito(a)'], espera: ['alerta', 'Você está na lista de espera'], reserva: ['alerta', 'Vaga reservada · aguardando pagamento'], pedido: ['alerta', 'Pedido enviado · aguardando a recepção'] }[estados[0]];
   return `<div class="inscricao-selo"><span class="badge ${selo[0]}">${selo[1]}</span></div>`;
 }
 
@@ -176,12 +176,12 @@ async function verAlunos(aula, turmas) {
   const m = abrirModal({ titulo: `Alunos — ${aula.nome}`, largura: 560, corpo: carregando() });
   try {
     const mats = ok(await sb.from('matriculas')
-      .select('id,status,plano,turma_id,created_at,alunos(id,nome,ativo,participante_proprio,participante_nome,foto)')
+      .select('id,status,plano,turma_id,created_at,alunos(id,nome,ativo,participante_proprio,participante_nome,foto),pagamentos(status)')
       .eq('aula_id', aula.id).in('status', ['ativa', 'espera']).order('created_at'));
     const lista = (arr, fila) => arr.length
       ? `<ol style="margin:0;padding-left:22px">${arr.map((x) => `
           <li style="margin:6px 0"><span class="com-avatar">${avatarHTML(x.alunos.foto, nomeParticipante(x.alunos), 34)}<span><a href="#/alunos/${x.alunos.id}" data-ir>${esc(nomeParticipante(x.alunos))}</a>${nomeParticipante(x.alunos) !== x.alunos.nome ? ` <small class="sub">(resp.: ${esc(x.alunos.nome)})</small>` : ''}
-          <span class="badge">${planoLabel(x.plano)}</span>${x.alunos.ativo ? '' : ' <span class="badge cinza">Desativado</span>'}</span></span></li>`).join('')}</ol>`
+          <span class="badge">${planoLabel(x.plano)}</span>${x.status === 'ativa' && !(x.pagamentos || []).some((p) => p.status === 'pago') ? ' <span class="badge alerta">Reserva de vaga</span>' : ''}${x.alunos.ativo ? '' : ' <span class="badge cinza">Desativado</span>'}</span></span></li>`).join('')}</ol>`
       : vazio(fila ? 'Ninguém na lista de espera.' : 'Nenhum aluno inscrito.');
     const grupo = (titulo, vagas, doGrupo) => {
       const ativos = doGrupo.filter((x) => x.status === 'ativa');

@@ -1,7 +1,7 @@
 // Primeiro acesso: troca da senha temporária e (para alunos) cadastro, foto de perfil e aceite do termo (LGPD).
 // Enquanto não concluir, o app não libera nenhuma outra tela.
 import { sb, ok } from './supabase.js';
-import { esc, hojeISO, comBotao, camposVinculo, camposParticipante, ligarParticipante, lerParticipante } from './ui.js';
+import { esc, hojeISO, comBotao, camposVinculo, camposEndereco, ligarEndereco, lerEndereco, argsEndereco } from './ui.js';
 import { campoFoto, ligarCampoFoto, salvarFoto } from './fotos.js';
 import { TERMO_VERSAO, caixaTermo, abrirTermo } from './termo.js';
 import { camposParq, ligarParq, lerParq } from './parq.js';
@@ -36,8 +36,8 @@ export async function renderPrimeiroAcesso(el, { trocarSenha, pendentes, aoConcl
           ${pedeParq ? camposParq() : ''}
           ${pedeTermo ? caixaTermo() : ''}
         ` : aluno ? `
-          <h2>Seus dados (responsável)</h2>
-          <p class="sub" style="margin:-4px 0 12px">Quem tem o acesso ao app e cuida dos pagamentos. Se as aulas forem para um filho ou dependente, informe logo abaixo.</p>
+          <h2>Seus dados</h2>
+          <p class="sub" style="margin:-4px 0 12px">Quem tem o acesso ao app e cuida dos pagamentos. Vai inscrever um filho ou outro dependente? Depois do cadastro, use “Adicionar dependente” em <strong>Minha família</strong>, no seu painel.</p>
           <label class="campo"><span>Nome completo *</span><input type="text" name="nome" maxlength="120" autocomplete="name" required></label>
           <div class="grade2">
             <label class="campo"><span>Telefone / WhatsApp *</span><input type="tel" name="telefone" maxlength="20" autocomplete="tel" inputmode="tel" required></label>
@@ -45,10 +45,9 @@ export async function renderPrimeiroAcesso(el, { trocarSenha, pendentes, aoConcl
             <label class="campo"><span>CPF</span><input type="text" name="cpf" maxlength="14" inputmode="numeric"></label>
             <label class="campo"><span>E-mail</span><input type="email" value="${esc(aluno.email)}" disabled></label>
           </div>
-          <label class="campo"><span>Endereço</span><input type="text" name="endereco" maxlength="200" autocomplete="street-address"></label>
+          ${camposEndereco()}
           ${camposVinculo()}
-          ${camposParticipante()}
-          ${campoFoto({ titulo: 'Foto de perfil', ajuda: AJUDA_FOTO })}
+          ${campoFoto({ titulo: 'Sua foto de perfil', ajuda: 'Sua foto, com o rosto bem visível. Ela aparece ao lado do nome para a recepção e o professor identificarem você.' })}
           ${camposParq()}
           ${caixaTermo()}
         ` : ''}
@@ -70,14 +69,14 @@ export async function renderPrimeiroAcesso(el, { trocarSenha, pendentes, aoConcl
     if (t) el.querySelector('#pa-erro').scrollIntoView({ block: 'center', behavior: 'smooth' });
   };
 
-  if (aluno && !soFoto) ligarParticipante(form);
+  if (aluno && !soFoto) ligarEndereco(form);
   if (pedeParq) ligarParq(form);
   const fotoEscolhida = pedeFoto ? ligarCampoFoto(form) : () => null;
   form.querySelector('[data-ver-termo]')?.addEventListener('click', (e) => { e.preventDefault(); abrirTermo(); });
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    let part = null;
+    let endereco = null;
     let parq = null;
     if (pedeFoto && !fotoEscolhida()) return erro('A foto de perfil é obrigatória. Toque em “Escolher foto”.');
     if (pedeParq) { try { parq = lerParq(form); } catch (err) { return erro(err.message); } }
@@ -86,7 +85,7 @@ export async function renderPrimeiroAcesso(el, { trocarSenha, pendentes, aoConcl
       if (!form.nome.value.trim() || form.nome.value.trim().split(/\s+/).length < 2) return erro('Informe seu nome completo (nome e sobrenome).');
       if (form.telefone.value.replace(/\D/g, '').length < 10) return erro('Informe o telefone com DDD.');
       if (!form.querySelector('[name=vinculo]:checked')) return erro('Marque o seu vínculo com o Cevisa: externo, funcionário ou prestador.');
-      try { part = lerParticipante(form); } catch (err) { return erro(err.message); }
+      try { endereco = lerEndereco(form); } catch (err) { return erro(err.message); }
     }
     if (trocarSenha) {
       if (form.senha.value.length < 8) return erro('A nova senha precisa ter pelo menos 8 caracteres.');
@@ -105,11 +104,12 @@ export async function renderPrimeiroAcesso(el, { trocarSenha, pendentes, aoConcl
             p_telefone: form.telefone.value.trim(),
             p_cpf: form.cpf.value.trim() || null,
             p_nascimento: form.nascimento.value || null,
-            p_endereco: form.endereco.value.trim() || null,
-            p_proprio: part.proprio,
-            p_participante: part.nome,
-            p_participante_nasc: part.nascimento,
+            p_endereco: null, // gravado em seguida, completo, por definir_endereco
+            p_proprio: true, // dependentes são cadastrados depois, em "Adicionar dependente"
+            p_participante: null,
+            p_participante_nasc: null,
           }));
+          ok(await sb.rpc('definir_endereco', argsEndereco(aluno.id, endereco)));
           ok(await sb.rpc('declarar_vinculo', { p_aluno: aluno.id, p_vinculo: form.querySelector('[name=vinculo]:checked').value }));
         }
         // depois dos dados, para o aviso da equipe sair com o nome certo

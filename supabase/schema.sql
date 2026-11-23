@@ -761,7 +761,7 @@ begin
      set data_fim = (data_fim + make_interval(months => p.meses))::date
    where id = p.matricula_id and status = 'ativa';
   update public.notificacoes set lida = true
-   where matricula_id = p.matricula_id and tipo in ('vence_em_breve','vencido','vaga_liberada');
+   where matricula_id = p.matricula_id and tipo in ('vence_em_breve','vencido','vaga_liberada','inscricao_solicitada');
   update public.notificacoes set lida = true
    where aluno_id = p.aluno_id and tipo in ('pagamento_informado','comprovante_enviado');
 end $$;
@@ -1128,14 +1128,20 @@ declare r jsonb;
 begin
   if auth.uid() is null then raise exception 'Acesso negado.'; end if;
   select coalesce(jsonb_agg(jsonb_build_object(
-           'id', a.id, 'nome', a.nome, 'participante', public._participante(a), 'foto', a.foto, 'vinculo', public._vinculo_preco(a), 'vinculo_declarado', a.vinculo_declarado, 'ativo', a.ativo, 'cadastro_completo', a.cadastro_completo,
+           'id', a.id, 'nome', a.nome, 'participante', public._participante(a), 'foto', a.foto, 'vinculo', public._vinculo_preco(a),
+           'dependente', a.responsavel_id is not null, 'parentesco', a.parentesco, 'vinculo_declarado', a.vinculo_declarado, 'ativo', a.ativo, 'cadastro_completo', a.cadastro_completo,
            'matriculas', coalesce((
               select jsonb_agg(jsonb_build_object(
                        'id', m.id, 'aula_id', m.aula_id, 'status', m.status, 'plano', m.plano,
                        'data_inicio', m.data_inicio, 'data_fim', m.data_fim,
                        'aula', au.nome, 'horarios', coalesce(t.horarios, au.horarios),
                        'turma_id', m.turma_id, 'turma', t.nome,
-                       'grupo', case when m.status = 'ativa' then coalesce(t.whatsapp_grupo, au.whatsapp_grupo) end, 'grupo_visto', m.grupo_visto,
+                       -- reserva de vaga: inscrito, mas nenhum pagamento registrado ainda (grupo só depois de pagar)
+                       'reserva', m.status = 'ativa' and not exists (select 1 from public.pagamentos pg
+                                                                      where pg.matricula_id = m.id and pg.status = 'pago'),
+                       'grupo', case when m.status = 'ativa' and exists (select 1 from public.pagamentos pg
+                                                                          where pg.matricula_id = m.id and pg.status = 'pago')
+                                     then coalesce(t.whatsapp_grupo, au.whatsapp_grupo) end, 'grupo_visto', m.grupo_visto,
                        'trancados', coalesce((select jsonb_agg(tr.mes order by tr.mes) from public.trancamentos tr where tr.matricula_id = m.id), '[]'::jsonb),
                        'tranc_pedido', (select jsonb_build_object('mes', tp.mes, 'status', tp.status) from public.trancamento_pedidos tp
                                          where tp.matricula_id = m.id and tp.mes >= date_trunc('month', current_date)::date
@@ -1483,13 +1489,15 @@ begin
   if not found then raise exception 'Cadastro não encontrado.'; end if;
 end $$;
 
--- Aluno pede inscrição numa aula (e turma); o gestor/admin recebe uma notificação no sino.
+-- Aluno se inscreve numa aula (e turma) pelo app: a vaga fica RESERVADA na hora (matrícula + cobrança) e
+-- a ficha mostra "Reserva de vaga" até a recepção registrar o primeiro pagamento. Sem vaga: lista de espera.
+-- O gestor/admin recebe uma notificação no sino.
 -- Turma sem vaga só pode ser escolhida quando TODAS as turmas da aula estão cheias (fila de espera).
 drop function if exists public.solicitar_inscricao(uuid, uuid, text, text);
 create or replace function public.solicitar_inscricao(p_aluno uuid, p_aula uuid, p_plano text,
                                                       p_obs text default null, p_turma uuid default null)
 returns uuid language plpgsql security definer set search_path = public as $$
-declare v_nome text; v_aula text; v_turma text; v_lotada boolean; v_id uuid;
+declare v_nome text; v_aula text; v_turma text; v_lotada boolean; v_id uuid; v_vagas int; v_ocupadas int; v_status text;
 begin
   if auth.uid() is null then raise exception 'Acesso negado.'; end if;
   -- no aviso aparece quem vai fazer a aula (e o responsável, se for um dependente)
@@ -1517,16 +1525,32 @@ begin
     raise exception 'Você já pediu inscrição nesta aula. Aguarde a recepção.';
   end if;
 
-  insert into public.solicitacoes_inscricao (aluno_id, aula_id, turma_id, plano, observacao)
-  values (p_aluno, p_aula, p_turma, p_plano, left(nullif(trim(p_obs), ''), 300))
+  -- reserva a vaga (ou entra no fim da fila, se já houver fila ou a turma estiver cheia)
+  perform 1 from public.aulas where id = p_aula for update;
+  v_vagas := coalesce(public._vagas_grupo(p_aula, p_turma), 0);
+  select count(*) into v_ocupadas from public.matriculas
+   where aula_id = p_aula and turma_id is not distinct from p_turma and status = 'ativa';
+  if v_ocupadas < v_vagas and not exists (select 1 from public.matriculas
+       where aula_id = p_aula and turma_id is not distinct from p_turma and status = 'espera') then
+    v_status := 'ativa';
+  else
+    v_status := 'espera';
+  end if;
+  insert into public.matriculas (aluno_id, aula_id, turma_id, plano, status, data_inicio, data_fim)
+  values (p_aluno, p_aula, p_turma, p_plano, v_status, current_date, current_date)
   returning id into v_id;
+  if v_status = 'ativa' then perform public._criar_cobranca(v_id); end if;
 
-  insert into public.notificacoes (tipo, aluno_id, solicitacao_id, referencia, mensagem)
+  insert into public.notificacoes (tipo, aluno_id, matricula_id, referencia, mensagem)
   values ('inscricao_solicitada', p_aluno, v_id, current_date,
-          v_nome || ' pediu ' || case when v_lotada then 'vaga na lista de espera de ' else 'inscrição em ' end
+          v_nome || case when v_status = 'ativa' then ' reservou vaga em ' else ' entrou na lista de espera de ' end
           || v_aula || coalesce(' — ' || v_turma, '') || ' (plano ' || p_plano || ').'
           || coalesce(' Obs.: ' || left(nullif(trim(p_obs), ''), 300), '')
-          || ' Toque para abrir a ficha e inscrever.');
+          || case when v_status = 'ativa' then ' A inscrição é confirmada quando o pagamento for registrado.' else '' end);
+  -- funcionário isento já sai confirmado: o aviso não precisa ficar aberto
+  if v_status = 'ativa' and exists (select 1 from public.pagamentos where matricula_id = v_id and status = 'pago') then
+    update public.notificacoes set lida = true where matricula_id = v_id and tipo = 'inscricao_solicitada';
+  end if;
   return v_id;
 end $$;
 
@@ -1954,7 +1978,7 @@ begin
   if not public.is_gestor() then raise exception 'Acesso negado.'; end if;
   return coalesce((select jsonb_agg(jsonb_build_object(
             'id', a.id, 'nome', a.nome, 'participante', public._participante(a), 'foto', a.foto,
-            'ativo', a.ativo, 'principal', a.responsavel_id is null,
+            'ativo', a.ativo, 'principal', a.responsavel_id is null, 'parentesco', a.parentesco, 'sexo', a.sexo,
             'aulas', (select count(*) from public.matriculas m where m.aluno_id = a.id and m.status in ('ativa','espera')))
            order by (a.responsavel_id is not null), a.created_at)
     from public.alunos a where a.id in (select public._familia(p_aluno))), '[]'::jsonb);
@@ -1962,12 +1986,21 @@ end $$;
 revoke all on function public.familia_aluno(uuid) from public, anon;
 grant execute on function public.familia_aluno(uuid) to authenticated;
 
+-- Sexo e grau de parentesco (com o responsável) de cada dependente.
+alter table public.alunos add column if not exists sexo text;
+alter table public.alunos add column if not exists parentesco text;
+alter table public.alunos drop constraint if exists alunos_sexo_check;
+alter table public.alunos add constraint alunos_sexo_check check (sexo is null or sexo in ('F','M'));
+
 -- Adiciona um dependente. O responsável (no app, p_base = null) ou a equipe (p_base = ficha do responsável).
 -- A nova ficha copia os dados de contato e o aceite do termo do responsável; foto e PAR-Q do
 -- dependente são pedidos ao responsável no próximo acesso ao app.
-create or replace function public.adicionar_dependente(p_base uuid, p_nome text, p_nascimento date default null)
+drop function if exists public.adicionar_dependente(uuid, text, date);
+create or replace function public.adicionar_dependente(p_base uuid, p_nome text, p_nascimento date default null,
+                                                       p_sexo text default null, p_parentesco text default null)
 returns uuid language plpgsql security definer set search_path = public as $$
 declare b public.alunos; v_id uuid; v_nome text := left(trim(coalesce(p_nome, '')), 120);
+        v_par text := left(nullif(trim(p_parentesco), ''), 40);
 begin
   if auth.uid() is null then raise exception 'Acesso negado.'; end if;
   if public.is_gestor() and p_base is not null then
@@ -1980,6 +2013,8 @@ begin
   if not found then raise exception 'Cadastro do responsável não encontrado.'; end if;
   if v_nome = '' then raise exception 'Informe o nome completo do dependente.'; end if;
   if p_nascimento is not null and p_nascimento > current_date then raise exception 'Data de nascimento inválida.'; end if;
+  if p_sexo is null or p_sexo not in ('F','M') then raise exception 'Informe o sexo do dependente.'; end if;
+  if v_par is null then raise exception 'Informe o grau de parentesco com o dependente.'; end if;
   if exists (select 1 from public.alunos a where a.id in (select public._familia(b.id))
               and lower(public._participante(a)) = lower(v_nome)) then
     raise exception '% já está cadastrado(a) na família.', v_nome;
@@ -1988,16 +2023,64 @@ begin
     raise exception 'Limite de fichas na família atingido. Fale com a recepção.';
   end if;
 
-  insert into public.alunos (nome, cpf, telefone, email, endereco, user_id, ativo, cadastro_completo,
+  insert into public.alunos (nome, cpf, telefone, email, endereco, endereco_detalhe, user_id, ativo, cadastro_completo,
                              participante_proprio, participante_nome, participante_nascimento,
-                             termo_aceito_em, termo_versao, vinculo, vinculo_declarado, criado_por, responsavel_id)
-  values (b.nome, b.cpf, b.telefone, b.email, b.endereco, b.user_id, true, true,
+                             termo_aceito_em, termo_versao, vinculo, vinculo_declarado, criado_por, responsavel_id,
+                             sexo, parentesco)
+  values (b.nome, b.cpf, b.telefone, b.email, b.endereco, b.endereco_detalhe, b.user_id, true, true,
           false, v_nome, p_nascimento,
-          b.termo_aceito_em, b.termo_versao, 'externo', 'externo', auth.uid(), coalesce(b.responsavel_id, b.id))
+          b.termo_aceito_em, b.termo_versao, 'externo', 'externo', auth.uid(), coalesce(b.responsavel_id, b.id),
+          p_sexo, v_par)
   returning id into v_id;
   return v_id;
 end $$;
-revoke all on function public.adicionar_dependente(uuid, text, date) from public, anon;
-grant execute on function public.adicionar_dependente(uuid, text, date) to authenticated;
+revoke all on function public.adicionar_dependente(uuid, text, date, text, text) from public, anon;
+grant execute on function public.adicionar_dependente(uuid, text, date, text, text) to authenticated;
+
+notify pgrst, 'reload schema';
+
+-- =====================================================================
+-- Endereço completo (preenchido pelo CEP no cadastro). O texto em "endereco" é montado
+-- a partir das partes, guardadas em endereco_detalhe para editar depois.
+-- =====================================================================
+alter table public.alunos add column if not exists endereco_detalhe jsonb;
+
+create or replace function public.definir_endereco(p_aluno uuid, p_cep text, p_logradouro text, p_numero text,
+                                                   p_complemento text, p_bairro text, p_cidade text, p_uf text)
+returns text language plpgsql security definer set search_path = public as $$
+declare
+  v_cep text := regexp_replace(coalesce(p_cep, ''), '\D', '', 'g');
+  v_log text := left(nullif(trim(p_logradouro), ''), 150);
+  v_num text := left(nullif(trim(p_numero), ''), 20);
+  v_comp text := left(nullif(trim(p_complemento), ''), 80);
+  v_bai text := left(nullif(trim(p_bairro), ''), 80);
+  v_cid text := left(nullif(trim(p_cidade), ''), 80);
+  v_uf  text := upper(left(nullif(trim(p_uf), ''), 2));
+  v_txt text;
+begin
+  if auth.uid() is null then raise exception 'Acesso negado.'; end if;
+  if not public.is_gestor() and not exists (select 1 from public.alunos where id = p_aluno and user_id = auth.uid()) then
+    raise exception 'Cadastro não encontrado.';
+  end if;
+  if v_cep <> '' and length(v_cep) <> 8 then raise exception 'CEP inválido: use 8 números.'; end if;
+  if v_log is null or v_num is null or v_bai is null or v_cid is null or v_uf is null then
+    raise exception 'Preencha o endereço completo: rua, número, bairro, cidade e estado.';
+  end if;
+  if v_uf !~ '^[A-Z]{2}$' then raise exception 'Estado (UF) inválido.'; end if;
+  if v_cep <> '' then v_cep := substr(v_cep, 1, 5) || '-' || substr(v_cep, 6, 3); end if;
+  v_txt := v_log || ', ' || v_num || coalesce(' - ' || v_comp, '') || ' - ' || v_bai || ', ' || v_cid || '/' || v_uf
+           || case when v_cep <> '' then ' - CEP ' || v_cep else '' end;
+  update public.alunos
+     set endereco = v_txt,
+         endereco_detalhe = jsonb_build_object('cep', nullif(v_cep, ''), 'logradouro', v_log, 'numero', v_num,
+                                               'complemento', v_comp, 'bairro', v_bai, 'cidade', v_cid, 'uf', v_uf)
+   where id = p_aluno;
+  -- dependentes da família recebem o mesmo endereço do responsável
+  update public.alunos d set endereco = v_txt, endereco_detalhe = (select endereco_detalhe from public.alunos where id = p_aluno)
+   where d.responsavel_id = p_aluno;
+  return v_txt;
+end $$;
+revoke all on function public.definir_endereco(uuid, text, text, text, text, text, text, text) from public, anon;
+grant execute on function public.definir_endereco(uuid, text, text, text, text, text, text, text) to authenticated;
 
 notify pgrst, 'reload schema';
