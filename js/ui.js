@@ -500,3 +500,21 @@ export function lerDependente(form) {
   if (!parentesco) throw new Error('Informe o grau de parentesco com o dependente.');
   return { sexo, parentesco };
 }
+
+// ------------------------------------------------------------------ idade mínima das aulas
+/** Idade em anos completos na data ref (YYYY-MM-DD); null sem data de nascimento. */
+export function idadeAnos(nasc, ref = hojeISO()) {
+  if (!nasc) return null;
+  const [y, m, d] = nasc.slice(0, 10).split('-').map(Number);
+  const [Y, M, D] = ref.split('-').map(Number);
+  return Y - y - (M < m || (M === m && D < d) ? 1 : 0);
+}
+/** Nascimento de quem faz as aulas: do painel (campo nascimento) ou da ficha (dependente ou titular). */
+export const nascimentoDe = (al) => (al.nascimento !== undefined ? al.nascimento
+  : al.participante_proprio === false && (al.participante_nome || '').trim() ? al.participante_nascimento : al.data_nascimento);
+/** true se a pessoa ainda não tem a idade mínima da aula (sem data de nascimento: não barra). */
+export function abaixoIdade(aula, al) {
+  if (!aula?.idade_minima) return false;
+  const i = idadeAnos(nascimentoDe(al));
+  return i !== null && i < aula.idade_minima;
+}

@@ -116,6 +116,17 @@ create index if not exists notificacoes_lida_idx on public.notificacoes (lida, c
 -- Horários de cada aula (texto livre, um horário por linha).
 alter table public.aulas add column if not exists horarios text;
 
+-- Idade mínima para se inscrever (ex.: musculação e hidroginástica a partir de 14 anos). Vazio = sem limite.
+-- Na primeira vez que a coluna é criada, já preenche 14 anos para musculação e hidroginástica.
+do $$
+begin
+  if not exists (select 1 from information_schema.columns
+                  where table_schema = 'public' and table_name = 'aulas' and column_name = 'idade_minima') then
+    alter table public.aulas add column idade_minima integer check (idade_minima is null or idade_minima between 1 and 120);
+    update public.aulas set idade_minima = 14 where nome ilike '%muscula%' or nome ilike '%hidrogin%';
+  end if;
+end $$;
+
 -- Acesso de alunos ao app: o usuário do Supabase Auth fica ligado ao cadastro
 -- de aluno com o mesmo e-mail (confirmado). Um responsável pode ter vários alunos.
 alter table public.alunos add column if not exists user_id uuid references auth.users(id) on delete set null;
@@ -406,7 +417,8 @@ create or replace view public.aulas_publicas as
          ((select count(*) from public.matriculas m
             where m.aula_id = a.id and m.turma_id is null and m.status = 'ativa') >= a.vagas
           or exists (select 1 from public.matriculas m
-                      where m.aula_id = a.id and m.turma_id is null and m.status = 'espera')) as lotada
+                      where m.aula_id = a.id and m.turma_id is null and m.status = 'espera')) as lotada,
+         a.idade_minima
   from public.aulas a
   where a.ativa
   order by a.ordem, a.nome;
@@ -635,6 +647,28 @@ begin
   perform public._atualizar_pendencias();
 end $$;
 
+-- Data de nascimento de quem faz as aulas (o dependente, se a ficha for de um dependente).
+create or replace function public._nascimento_participante(a public.alunos)
+returns date language plpgsql immutable as $$
+begin
+  return case when a.participante_proprio = false and nullif(trim(a.participante_nome), '') is not null
+              then a.participante_nascimento else a.data_nascimento end;
+end $$;
+
+-- Barra a inscrição de quem tem menos que a idade mínima da aula (sem data de nascimento: deixa passar).
+create or replace function public._checar_idade(p_aluno uuid, p_aula uuid)
+returns void language plpgsql stable security definer set search_path = public as $$
+declare v_min int; v_aula text; v_nasc date; v_nome text;
+begin
+  select idade_minima, nome into v_min, v_aula from public.aulas where id = p_aula;
+  if v_min is null then return; end if;
+  select public._nascimento_participante(a), public._participante(a) into v_nasc, v_nome from public.alunos a where a.id = p_aluno;
+  if v_nasc is not null and extract(year from age(current_date, v_nasc)) < v_min then
+    raise exception '% não pode se inscrever em %: a idade mínima é % anos.', v_nome, v_aula, v_min;
+  end if;
+end $$;
+revoke all on function public._checar_idade(uuid, uuid) from public, anon, authenticated;
+
 -- Inscreve o aluno (numa turma, se a aula tiver turmas); se não houver vaga entra na lista de espera.
 -- Retorna: { matricula_id, status, posicao_espera }
 drop function if exists public.inscrever_aluno(uuid, uuid, text, date);
@@ -660,6 +694,7 @@ begin
   if p_turma is not null and not exists (select 1 from public.turmas where id = p_turma and aula_id = p_aula) then
     raise exception 'Turma não encontrada nesta aula.';
   end if;
+  perform public._checar_idade(p_aluno, p_aula);
 
   if exists (select 1 from public.matriculas
               where aluno_id = p_aluno and aula_id = p_aula and status in ('ativa','espera')) then
@@ -1129,7 +1164,7 @@ begin
   if auth.uid() is null then raise exception 'Acesso negado.'; end if;
   select coalesce(jsonb_agg(jsonb_build_object(
            'id', a.id, 'nome', a.nome, 'participante', public._participante(a), 'foto', a.foto, 'vinculo', public._vinculo_preco(a),
-           'dependente', a.responsavel_id is not null, 'parentesco', a.parentesco, 'vinculo_declarado', a.vinculo_declarado, 'ativo', a.ativo, 'cadastro_completo', a.cadastro_completo,
+           'dependente', a.responsavel_id is not null, 'parentesco', a.parentesco, 'nascimento', public._nascimento_participante(a), 'vinculo_declarado', a.vinculo_declarado, 'ativo', a.ativo, 'cadastro_completo', a.cadastro_completo,
            'matriculas', coalesce((
               select jsonb_agg(jsonb_build_object(
                        'id', m.id, 'aula_id', m.aula_id, 'status', m.status, 'plano', m.plano,
@@ -1521,6 +1556,7 @@ begin
   if exists (select 1 from public.matriculas where aluno_id = p_aluno and aula_id = p_aula and status in ('ativa','espera')) then
     raise exception 'Você já está inscrito(a) nesta aula.';
   end if;
+  perform public._checar_idade(p_aluno, p_aula);
   if exists (select 1 from public.solicitacoes_inscricao where aluno_id = p_aluno and aula_id = p_aula and status = 'pendente') then
     raise exception 'Você já pediu inscrição nesta aula. Aguarde a recepção.';
   end if;

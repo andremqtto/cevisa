@@ -1,7 +1,7 @@
 // Tela inicial: aulas, turmas e preços (pública). Gestores editam tudo aqui.
 import { sb, ok } from './supabase.js';
 import { avatarHTML, ativarFotos } from './fotos.js';
-import { esc, money, abrirModal, toast, confirmar, comBotao, carregando, vazio, erroBox, planoLabel, horariosHTML, nomeParticipante, precoVinculo, moneyOuIsento, PRESTADOR_MENSAL } from './ui.js';
+import { abaixoIdade, esc, money, abrirModal, toast, confirmar, comBotao, carregando, vazio, erroBox, planoLabel, horariosHTML, nomeParticipante, precoVinculo, moneyOuIsento, PRESTADOR_MENSAL } from './ui.js';
 
 const FOTO_MAX = 5 * 1024 * 1024;
 
@@ -105,14 +105,16 @@ function inscricaoAluno(a, turmas, alunos) {
   const estados = alunos.map((al) => {
     const m = al.matriculas.find((x) => x.aula_id === a.id);
     if (m) return m.status === 'espera' ? 'espera' : m.reserva ? 'reserva' : 'inscrito';
-    return al.solicitacoes?.some((s) => s.aula_id === a.id) ? 'pedido' : 'livre';
+    if (al.solicitacoes?.some((s) => s.aula_id === a.id)) return 'pedido';
+    return abaixoIdade(a, al) ? 'idade' : 'livre';
   });
   if (estados.includes('livre')) {
     return aulaLotada(a, turmas)
       ? `<button class="btn amarelo largo" type="button" data-pedir="${a.id}">Fila de espera</button>`
       : `<button class="btn largo" type="button" data-pedir="${a.id}">Fazer inscrição</button>`;
   }
-  const selo = { inscrito: ['ok', 'Você está inscrito(a)'], espera: ['alerta', 'Você está na lista de espera'], reserva: ['alerta', 'Vaga reservada · aguardando pagamento'], pedido: ['alerta', 'Pedido enviado · aguardando a recepção'] }[estados[0]];
+  const estado = estados.find((e) => e !== 'idade') || 'idade';
+  const selo = { idade: ['cinza', `A partir de ${a.idade_minima} anos`], inscrito: ['ok', 'Você está inscrito(a)'], espera: ['alerta', 'Você está na lista de espera'], reserva: ['alerta', 'Vaga reservada · aguardando pagamento'], pedido: ['alerta', 'Pedido enviado · aguardando a recepção'] }[estado];
   return `<div class="inscricao-selo"><span class="badge ${selo[0]}">${selo[1]}</span></div>`;
 }
 
@@ -147,6 +149,7 @@ function cartao(a, ctx) {
       <div class="aula-corpo">
         <h2>${esc(a.nome)}</h2>
         ${a.descricao ? `<p>${esc(a.descricao)}</p>` : ''}
+        ${a.idade_minima ? `<p class="sub" style="margin:0 0 8px"><strong>A partir de ${a.idade_minima} anos.</strong></p>` : ''}
         ${turmas.length ? turmasHTML(turmas, ctx) : horariosHTML(a.horarios)}
         <div class="precos">
           ${precoBox('Mensal', a.preco_mensal, 'mensal', '', ctx.vinculo)}
@@ -332,6 +335,7 @@ function editarAula(aula, aoSalvar) {
         <div class="grade2">
           <label class="campo"><span>Vagas *</span><input type="number" name="vagas" min="0" step="1" required value="${a.vagas}"><small>Só gestores veem. Se a aula tiver turmas, valem as vagas de cada turma.</small></label>
           <label class="campo"><span>Ordem na tela</span><input type="number" name="ordem" step="1" value="${a.ordem}"><small>Menor número aparece primeiro.</small></label>
+          <label class="campo"><span>Idade mínima (anos)</span><input type="number" name="idade_minima" min="1" max="120" step="1" inputmode="numeric" value="${a.idade_minima ?? ''}"><small>Ex.: 14 = só a partir de 14 anos. Em branco = sem limite.</small></label>
         </div>
         <div class="campo">
           <span>Foto da aula</span>
@@ -405,6 +409,8 @@ function editarAula(aula, aoSalvar) {
     for (const n of ['preco_mensal', 'preco_semestral', 'preco_anual', 'preco_diaria']) {
       if (num(n) !== null && num(n) < 0) return erro('Os preços não podem ser negativos.');
     }
+    const idadeMin = num('idade_minima');
+    if (idadeMin !== null && (!Number.isInteger(idadeMin) || idadeMin < 1 || idadeMin > 120)) return erro('Idade mínima deve ser um número inteiro de 1 a 120 (ou em branco).');
     const grupo = form.whatsapp_grupo.value.trim();
     if (grupo && !/^https:\/\/\S+$/i.test(grupo)) return erro('O link do grupo precisa começar com https:// (ex.: https://chat.whatsapp.com/…).');
     erro('');
@@ -432,6 +438,7 @@ function editarAula(aula, aoSalvar) {
         ativa: form.ativa.checked,
         foto_url,
         whatsapp_grupo: grupo || null,
+        idade_minima: idadeMin,
       };
       ok(novo ? await sb.from('aulas').insert(dados) : await sb.from('aulas').update(dados).eq('id', a.id));
       toast(novo ? 'Aula criada.' : 'Aula atualizada.');
