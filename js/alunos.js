@@ -486,7 +486,6 @@ export async function renderFicha(el, id, { navegar }) {
         ${dado('Quem faz as aulas', aluno.participante_proprio === false
           ? `${nomeParticipante(aluno)}${aluno.participante_nascimento ? ` (nasc. ${fmtDate(aluno.participante_nascimento)})` : ''}`
           : 'O próprio responsável')}
-        ${aluno.responsavel_id ? dado('Dependente', [aluno.parentesco, SEXOS[aluno.sexo]].filter(Boolean).join(' · ') || '—') : ''}
         ${aluno.responsavel ? dado('Responsável (cadastro antigo)', aluno.responsavel) : ''}
         <div><dt>Vínculo com o Cevisa</dt><dd>${vinculoHTML(aluno)}</dd></div>
         <div><dt>Termo de privacidade (LGPD)</dt><dd>${aluno.termo_aceito_em ? `<span class="badge ok">Aceito</span> em ${fmtDate(aluno.termo_aceito_em.slice(0, 10))}${aluno.termo_versao ? ` · versão ${esc(aluno.termo_versao)}` : ''}` : aluno.user_id ? '<span class="badge alerta">Pendente</span> será pedido no próximo acesso' : '<span class="badge cinza">Sem acesso ao app</span> colher a autorização em papel'}</dd></div>
@@ -497,6 +496,7 @@ export async function renderFicha(el, id, { navegar }) {
 
     ${familia ? `
     <section class="card familia no-print">
+      ${aluno.responsavel_id ? familiaDependente(aluno, familia) : `
       <div class="card-topo">
         <h2>Família</h2>
         <button class="btn sec pequeno" type="button" id="add-dependente">＋ Adicionar dependente</button>
@@ -508,7 +508,7 @@ export async function renderFicha(el, id, { navegar }) {
             <small class="sub">${x.principal ? 'responsável' : `${esc(x.parentesco || 'dependente')} · resp.: ${esc(x.nome)}`} · ${x.aulas ? `${x.aulas} aula(s)` : 'sem aulas'}${x.ativo ? '' : ' · desativado'}${x.id === id ? ' · esta ficha' : ''}</small></div>
         ${x.id === id ? '</div>' : '</a>'}</li>`).join('')}</ul>
         <p class="sub" style="margin:10px 0 0">As cobranças de todos vão para o responsável, que vê e paga tudo junto no app.</p>`
-      : '<p class="sub" style="margin:0">Para inscrever filhos ou outros dependentes deste responsável, use “Adicionar dependente”: cada um ganha a própria ficha (foto, PAR-Q e turma), e as cobranças vão para o responsável.</p>'}
+      : '<p class="sub" style="margin:0">Para inscrever filhos ou outros dependentes deste responsável, use “Adicionar dependente”: cada um ganha a própria ficha (foto, PAR-Q e turma), e as cobranças vão para o responsável.</p>'}`}
     </section>` : ''}
 
     <section class="card">
@@ -872,6 +872,27 @@ async function inscrever(aluno, mats, aoConcluir, preset = {}) {
 }
 
 // ================================================================== DEPENDENTE
+/** Quadro "Família" na ficha de um dependente: responsável, grau de parentesco e os outros dependentes. */
+function familiaDependente(aluno, familia) {
+  const resp = familia.find((x) => x.id === aluno.responsavel_id) || { id: aluno.responsavel_id, participante: aluno.nome, foto: null };
+  const outros = familia.filter((x) => x.id !== aluno.id && x.id !== resp.id);
+  const item = (x, info) => `
+    <li><a class="familia-item" href="#/alunos/${x.id}">${avatarHTML(x.foto, x.participante, 40)}
+      <div><strong>${esc(x.participante)}</strong><small class="sub">${info}</small></div></a></li>`;
+  return `
+    <h2>Família</h2>
+    <dl class="dados">
+      <div><dt>Responsável</dt><dd><a href="#/alunos/${resp.id}">${esc(resp.participante)}</a></dd></div>
+      <div><dt>Parentesco</dt><dd>${aluno.parentesco ? `${esc(aluno.parentesco)} de ${esc(resp.participante.split(' ')[0])}` : '—'}</dd></div>
+      ${aluno.sexo ? `<div><dt>Sexo</dt><dd>${SEXOS[aluno.sexo] || '—'}</dd></div>` : ''}
+    </dl>
+    <ul class="familia-lista" style="margin-top:12px">
+      ${item(resp, 'responsável · abrir ficha')}
+      ${outros.map((x) => item(x, `${esc(x.parentesco || 'dependente')} · ${x.aulas ? `${x.aulas} aula(s)` : 'sem aulas'}${x.ativo ? '' : ' · desativado'}`)).join('')}
+    </ul>
+    <p class="sub" style="margin:10px 0 0">As cobranças deste dependente vão para o responsável. Para adicionar outro dependente, abra a ficha do responsável.</p>`;
+}
+
 function adicionarDependente(aluno, aoConcluir) {
   const m = abrirModal({
     titulo: 'Adicionar dependente',
