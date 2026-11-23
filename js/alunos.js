@@ -330,7 +330,7 @@ export function editarAluno(aluno, aoSalvar) {
 // ================================================================== FICHA
 export async function renderFicha(el, id, { navegar }) {
   el.innerHTML = carregando('Carregando ficha…');
-  let aluno, mats, pags, filas, pedidos = [], comprovantes = [], avisosPag = [], turmasPorAula = {};
+  let aluno, mats, pags, filas, pedidos = [], comprovantes = [], avisosPag = [], familia = null, turmasPorAula = {};
   try {
     aluno = ok(await sb.from('alunos').select('*').eq('id', id).maybeSingle());
     if (!aluno) { el.innerHTML = `<a class="voltar" href="#/alunos">← Alunos</a>${erroBox('Aluno não encontrado.')}`; return; }
@@ -350,6 +350,9 @@ export async function renderFicha(el, id, { navegar }) {
     const rn = await sb.from('notificacoes').select('id,tipo,mensagem,created_at').eq('aluno_id', id)
       .in('tipo', ['pagamento_informado', 'comprovante_enviado']).eq('lida', false).order('created_at', { ascending: false });
     avisosPag = rn.error ? [] : rn.data;
+    // fichas da mesma família (responsável e dependentes)
+    const rfam = await sb.rpc('familia_aluno', { p_aluno: id });
+    familia = rfam.error ? null : rfam.data;
     if (comprovantes.length) {
       const rs = await sb.storage.from('comprovantes').createSignedUrls(comprovantes.map((c) => c.arquivo), 3600);
       for (const c of comprovantes) c.url = rs.data?.find((x) => x.path === c.arquivo)?.signedUrl || null;
@@ -392,7 +395,7 @@ export async function renderFicha(el, id, { navegar }) {
             <td>${fmtMes(p.competencia)}</td><td>${esc(p.matriculas?.aulas?.nome)}</td><td>${planoLabel(p.plano)}</td>
             <td class="num">${money(p.valor)}</td><td>${fmtDate(p.vencimento)}</td>
             <td><span class="badge ${p.status === 'pago' ? 'ok' : atraso ? 'erro' : 'alerta'}">${p.status === 'pago' ? 'Pago' : atraso ? 'Em atraso' : 'Pendente'}</span></td>
-            <td>${fmtDate(p.pago_em)}</td><td>${esc(p.forma || '—')}</td>
+            <td>${fmtDate(p.pago_em)}</td><td>${esc(p.forma || '—')}${p.parcelas > 1 ? ` <span class="badge info">${p.parcelas}x</span>` : ''}</td>
             <td class="num acoes-cobranca">${(() => { const z = p.status === 'pendente' && linkCobrancaWhatsApp({ valor: p.valor, vencimento: p.vencimento, aula: p.matriculas?.aulas?.nome }, aluno); return z ? `<a class="btn pequeno whats" href="${esc(z)}" target="_blank" rel="noopener" title="Enviar a cobrança pelo WhatsApp">${ICONE_WHATSAPP}Cobrar</a> ` : ''; })()}${p.status === 'pendente' ? `<button class="btn pequeno" type="button" data-pagar="${p.id}">Registrar pagamento</button>` : ''}</td></tr>`;
         }).join('')}</tbody></table></div>`;
   const totalPago = pags.filter((p) => p.status === 'pago').reduce((t, p) => t + Number(p.valor), 0);
@@ -441,6 +444,7 @@ export async function renderFicha(el, id, { navegar }) {
             <small>pedido em ${fmtDate(p.created_at.slice(0, 10))}${p.observacao ? ` · “${esc(p.observacao)}”` : ''}</small></div>
           <div class="acoes-linha">
             <button class="btn sec perigo pequeno" type="button" data-recusar-pedido="${p.id}">Recusar</button>
+            <button class="btn sec pequeno" type="button" data-aceitar-pedido="${p.id}" data-desconto>Inscrever com desconto</button>
             <button class="btn pequeno" type="button" data-aceitar-pedido="${p.id}">Inscrever agora</button>
           </div>
         </li>`).join('')}</ul>
@@ -477,6 +481,22 @@ export async function renderFicha(el, id, { navegar }) {
       </dl>
     </section>
 
+    ${familia ? `
+    <section class="card familia no-print">
+      <div class="card-topo">
+        <h2>Família</h2>
+        <button class="btn sec pequeno" type="button" id="add-dependente">＋ Adicionar dependente</button>
+      </div>
+      ${familia.length > 1 ? `<ul class="familia-lista">${familia.map((x) => `
+        <li>${x.id === id ? '<div class="familia-item atual">' : `<a class="familia-item" href="#/alunos/${x.id}">`}
+          ${avatarHTML(x.foto, x.participante, 40)}
+          <div><strong>${esc(x.participante)}</strong>
+            <small class="sub">${x.participante === x.nome ? 'responsável' : `dependente · resp.: ${esc(x.nome)}`} · ${x.aulas ? `${x.aulas} aula(s)` : 'sem aulas'}${x.ativo ? '' : ' · desativado'}${x.id === id ? ' · esta ficha' : ''}</small></div>
+        ${x.id === id ? '</div>' : '</a>'}</li>`).join('')}</ul>
+        <p class="sub" style="margin:10px 0 0">As cobranças de todos vão para o responsável, que vê e paga tudo junto no app.</p>`
+      : '<p class="sub" style="margin:0">Para inscrever filhos ou outros dependentes deste responsável, use “Adicionar dependente”: cada um ganha a própria ficha (foto, PAR-Q e turma), e as cobranças vão para o responsável.</p>'}
+    </section>` : ''}
+
     <section class="card">
       <h2>Aulas e planos</h2>
       ${matsVivas.length ? tabelaMats(matsVivas)
@@ -485,7 +505,7 @@ export async function renderFicha(el, id, { navegar }) {
 
     ${comprovantes.length ? `
     <section class="card">
-      <h2>Comprovantes enviados pelo aluno</h2>
+      <h2>Comprovantes</h2>
       <ul class="lista-equipe">${comprovantes.map((c) => `
         <li>
           <div><strong>${fmtDate(c.created_at.slice(0, 10))}</strong> · ${esc(c.nome_arquivo || 'arquivo')}
@@ -558,6 +578,7 @@ export async function renderFicha(el, id, { navegar }) {
     };
   });
   ativarFotos(el);
+  el.querySelector('#add-dependente')?.addEventListener('click', () => adicionarDependente(aluno, (novo) => navegar(`#/alunos/${novo}`)));
   el.querySelector('#trocar-foto').addEventListener('change', async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
@@ -609,7 +630,7 @@ export async function renderFicha(el, id, { navegar }) {
   el.querySelectorAll('[data-aceitar-pedido]').forEach((b) => {
     b.onclick = () => {
       const p = pedidos.find((x) => x.id === b.dataset.aceitarPedido);
-      inscrever(aluno, mats, recarregar, { aula_id: p.aula_id, plano: p.plano, turma_id: p.turma_id });
+      inscrever(aluno, mats, recarregar, { aula_id: p.aula_id, plano: p.plano, turma_id: p.turma_id, desconto: 'desconto' in b.dataset });
     };
   });
   el.querySelectorAll('[data-recusar-pedido]').forEach((b) => {
@@ -635,6 +656,8 @@ export async function renderFicha(el, id, { navegar }) {
       const mt = mats.find((x) => x.id === troca.dataset.trocarTurma);
       return trocarTurma(mt, turmasPorAula[mt.aula_id] || [], recarregar);
     }
+    const desc = e.target.closest('[data-desconto-mat]');
+    if (desc) return editarDesconto(mats.find((x) => x.id === desc.dataset.descontoMat), aluno, recarregar);
     const trancar = e.target.closest('[data-trancar]');
     if (trancar) return trancarMes(mats.find((m) => m.id === trancar.dataset.trancar), recarregar);
     const desfazer = e.target.closest('[data-destrancar]');
@@ -680,7 +703,8 @@ function linhaMatricula(m, posicao, hoje, turmas = []) {
   return `<tr>
     <td><strong>${esc(m.aulas?.nome)}</strong>${m.turmas?.nome ? `<br><small class="sub">${esc(m.turmas.nome)}</small>`
       : turmas.length && m.status !== 'encerrada' ? '<br><span class="badge alerta">sem turma</span>' : ''}</td>
-    <td>${planoLabel(m.plano)}<br><small class="sub">${MESES_PLANO[m.plano]} mês(es)</small></td>
+    <td>${planoLabel(m.plano)}<br><small class="sub">${MESES_PLANO[m.plano]} mês(es)</small>${m.valor_personalizado !== null && m.valor_personalizado !== undefined
+      ? `<br><span class="badge info">Desconto: ${money(m.valor_personalizado)}</span>${m.desconto_motivo ? `<br><small class="sub">${esc(m.desconto_motivo)}</small>` : ''}` : ''}</td>
     <td>${st}</td>
     <td>${m.status === 'espera' ? '—' : fmtDate(m.data_inicio)}${m.data_encerramento ? `<br><small class="sub">encerrada em ${fmtDate(m.data_encerramento)}</small>` : ''}</td>
     <td>${pagoAte}</td>
@@ -688,6 +712,7 @@ function linhaMatricula(m, posicao, hoje, turmas = []) {
     <td class="num"><div class="acoes-linha no-print">
       ${turmas.length && m.status !== 'encerrada' ? `<button class="btn sec pequeno" type="button" data-trocar-turma="${m.id}">Trocar turma</button>` : ''}
       ${podeTrancar ? `<button class="btn sec pequeno" type="button" data-trancar="${m.id}">Trancar mês</button>` : ''}
+      ${m.status !== 'encerrada' ? `<button class="btn sec pequeno" type="button" data-desconto-mat="${m.id}">Desconto</button>` : ''}
       ${m.status !== 'encerrada' ? `<button class="btn sec perigo pequeno" type="button" data-encerrar="${m.id}">${m.status === 'espera' ? 'Sair da fila' : 'Encerrar'}</button>` : ''}
     </div></td></tr>`;
 }
@@ -695,7 +720,7 @@ function linhaMatricula(m, posicao, hoje, turmas = []) {
 // ================================================================== INSCREVER
 async function inscrever(aluno, mats, aoConcluir, preset = {}) {
   // preset: aula e plano escolhidos pelo aluno num pedido de inscrição feito pelo app
-  const m = abrirModal({ titulo: `Inscrever ${nomeParticipante(aluno)}`, largura: 540, corpo: carregando() });
+  const m = abrirModal({ titulo: `${preset.desconto ? 'Inscrever com desconto —' : 'Inscrever'} ${nomeParticipante(aluno)}`, largura: 540, corpo: carregando() });
   let aulas, turmas = [];
   const ocupacao = {};   // chave: id da turma, ou id da aula para quem está sem turma
   try {
@@ -739,6 +764,16 @@ async function inscrever(aluno, mats, aoConcluir, preset = {}) {
         <div id="planos" style="display:grid;gap:8px"></div>
       </fieldset>
       <label class="campo"><span>Início do contrato</span><input type="date" name="inicio" value="${hojeISO()}" required></label>
+      ${preset.desconto ? `
+      <fieldset class="desconto-campos">
+        <legend>Desconto</legend>
+        <label class="campo"><span>Novo valor a ser pago (R$) *</span>
+          <input type="number" name="valor" min="0" step="0.01" inputmode="decimal" required>
+          <small id="preco-normal"></small></label>
+        <label class="campo"><span>Motivo do desconto *</span>
+          <textarea name="motivo" rows="2" maxlength="300" required placeholder="Ex.: irmão de aluno, bolsa, combinado com a direção…"></textarea></label>
+        <small class="sub">O valor vale para todas as cobranças desta aula, até ser alterado ou retirado na ficha.</small>
+      </fieldset>` : ''}
       <div id="aviso-vaga"></div>
       <div id="i-erro"></div>
       <div class="acoes">
@@ -771,6 +806,12 @@ async function inscrever(aluno, mats, aoConcluir, preset = {}) {
         <input type="radio" name="plano" value="${p}" ${p === marcado ? 'checked' : ''}>
         ${PLANOS[p]} <span style="margin-left:auto;font-weight:700;color:var(--azul)">${preco(a, p) === null ? 'sem preço' : moneyOuIsento(preco(a, p))}</span>
       </label>`).join('');
+    const pn = m.el.querySelector('#preco-normal');
+    if (pn) {
+      const pl = form.plano?.value || marcado;
+      const v = preco(a, pl);
+      pn.textContent = v === null ? 'Plano sem preço definido.' : `Preço normal: ${moneyOuIsento(v)} (${PLANOS[pl].toLowerCase()})`;
+    }
     const o = grupo(a, form.turma?.value || null);
     const cheia = o.ativa >= o.vagas || o.espera > 0;
     m.el.querySelector('#aviso-vaga').innerHTML = cheia
@@ -782,6 +823,7 @@ async function inscrever(aluno, mats, aoConcluir, preset = {}) {
     m.el.querySelector('#aviso-vaga').insertAdjacentHTML('beforebegin', '<div class="aviso alerta">A aula pedida pelo aluno não está disponível (oculta ou já inscrito). Escolha outra ou recuse o pedido.</div>');
   }
   form.aula.addEventListener('change', () => { desenharTurmas(); atualizar(); });
+  m.el.querySelector('#planos').addEventListener('change', () => { if (preset.desconto) atualizar(); });
   desenharTurmas();
   atualizar();
 
@@ -789,12 +831,19 @@ async function inscrever(aluno, mats, aoConcluir, preset = {}) {
     e.preventDefault();
     if (!form.inicio.value) return erro('Informe a data de início.');
     const a = livres.find((x) => x.id === form.aula.value);
-    if (preco(a, form.plano.value) === null && !(await confirmar('Este plano está sem preço definido; a cobrança será gerada com valor R$ 0,00. Continuar mesmo assim?', { titulo: 'Plano sem preço', confirmarTexto: 'Continuar' }))) return;
+    let valorDesc = null;
+    if (preset.desconto) {
+      valorDesc = Number(String(form.valor.value).replace(',', '.'));
+      if (form.valor.value === '' || !(valorDesc >= 0)) return erro('Digite o novo valor a ser pago.');
+      if (!form.motivo.value.trim()) return erro('Escreva o motivo do desconto.');
+    }
+    if (!preset.desconto && preco(a, form.plano.value) === null && !(await confirmar('Este plano está sem preço definido; a cobrança será gerada com valor R$ 0,00. Continuar mesmo assim?', { titulo: 'Plano sem preço', confirmarTexto: 'Continuar' }))) return;
     erro('');
     await comBotao(form.querySelector('[type=submit]'), async () => {
       try {
         const args = { p_aluno: aluno.id, p_aula: form.aula.value, p_plano: form.plano.value, p_inicio: form.inicio.value };
         if (form.turma?.value) args.p_turma = form.turma.value;
+        if (preset.desconto) { args.p_valor = valorDesc; args.p_motivo = form.motivo.value.trim(); }
         const r = ok(await sb.rpc('inscrever_aluno', args));
         m.fechar();
         toast(r.status === 'espera'
@@ -803,6 +852,89 @@ async function inscrever(aluno, mats, aoConcluir, preset = {}) {
         aoConcluir();
       } catch (err) { erro(err.message); }
     });
+  });
+}
+
+// ================================================================== DEPENDENTE
+function adicionarDependente(aluno, aoConcluir) {
+  const m = abrirModal({
+    titulo: 'Adicionar dependente',
+    largura: 460,
+    corpo: `
+      <p class="sub" style="margin:0 0 12px">Responsável: <strong>${esc(aluno.nome)}</strong>. O dependente ganha a própria ficha, com os mesmos contatos do responsável; as cobranças vão para ele.</p>
+      <form id="f-dep" novalidate>
+        <label class="campo"><span>Nome completo do dependente *</span><input type="text" name="nome" maxlength="120" required></label>
+        <label class="campo"><span>Data de nascimento</span><input type="date" name="nasc" max="${hojeISO()}"></label>
+        <small class="sub">A foto e o questionário de saúde (PAR-Q) do dependente serão pedidos ao responsável no próximo acesso ao app.</small>
+        <div id="dep-erro"></div>
+        <div class="acoes">
+          <button class="btn sec" type="button" data-cancelar>Cancelar</button>
+          <button class="btn" type="submit">Adicionar</button>
+        </div>
+      </form>`,
+  });
+  const form = m.el.querySelector('#f-dep');
+  const erro = (t) => { m.el.querySelector('#dep-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
+  m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!form.nome.value.trim()) return erro('Informe o nome completo do dependente.');
+    erro('');
+    await comBotao(form.querySelector('[type=submit]'), async () => {
+      try {
+        const novo = ok(await sb.rpc('adicionar_dependente', { p_base: aluno.id, p_nome: form.nome.value.trim(), p_nascimento: form.nasc.value || null }));
+        m.fechar();
+        toast(`${form.nome.value.trim()} cadastrado(a). Agora inscreva nas aulas.`);
+        aoConcluir(novo);
+      } catch (err) { erro(err.message); }
+    });
+  });
+}
+
+// ================================================================== DESCONTO
+function editarDesconto(mat, aluno, aoConcluir) {
+  const tem = mat.valor_personalizado !== null && mat.valor_personalizado !== undefined;
+  const m = abrirModal({
+    titulo: `Desconto — ${mat.aulas?.nome}`,
+    largura: 460,
+    corpo: `
+      <p style="margin:0 0 12px"><strong>${esc(nomeParticipante(aluno))}</strong> · plano ${esc(planoLabel(mat.plano).toLowerCase())}</p>
+      <form id="f-desc" novalidate>
+        <label class="campo"><span>Novo valor a ser pago (R$) *</span>
+          <input type="number" name="valor" min="0" step="0.01" inputmode="decimal" value="${tem ? mat.valor_personalizado : ''}" required></label>
+        <label class="campo"><span>Motivo do desconto *</span>
+          <textarea name="motivo" rows="2" maxlength="300" required>${esc(mat.desconto_motivo || '')}</textarea></label>
+        <small class="sub">Vale para todas as cobranças desta aula. A cobrança em aberto passa a ter o novo valor.</small>
+        <div id="ds-erro"></div>
+        <div class="acoes">
+          ${tem ? '<button class="btn sec perigo" type="button" data-remover>Retirar desconto</button>' : '<button class="btn sec" type="button" data-cancelar>Cancelar</button>'}
+          <button class="btn" type="submit">Salvar desconto</button>
+        </div>
+      </form>`,
+  });
+  const form = m.el.querySelector('#f-desc');
+  const erro = (t) => { m.el.querySelector('#ds-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
+  const salvar = (btn, valor, motivo) => comBotao(btn, async () => {
+    try {
+      ok(await sb.rpc('definir_desconto', { p_matricula: mat.id, p_valor: valor, p_motivo: motivo }));
+      m.fechar();
+      toast(valor === null ? 'Desconto retirado: volta o preço normal.' : `Desconto salvo: ${money(valor)}.`);
+      aoConcluir();
+    } catch (err) { erro(err.message); }
+  });
+  m.el.querySelector('[data-cancelar]')?.addEventListener('click', () => m.fechar());
+  m.el.querySelector('[data-remover]')?.addEventListener('click', async (e) => {
+    const b = e.currentTarget;
+    if (!(await confirmar('Retirar o desconto? As próximas cobranças voltam ao preço normal do plano.', { titulo: 'Retirar desconto', confirmarTexto: 'Retirar', perigo: true }))) return;
+    salvar(b, null, null);
+  });
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const valor = Number(String(form.valor.value).replace(',', '.'));
+    if (form.valor.value === '' || !(valor >= 0)) return erro('Digite o novo valor a ser pago.');
+    if (!form.motivo.value.trim()) return erro('Escreva o motivo do desconto.');
+    erro('');
+    salvar(form.querySelector('[type=submit]'), valor, form.motivo.value.trim());
   });
 }
 

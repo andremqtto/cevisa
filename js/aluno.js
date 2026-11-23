@@ -98,7 +98,17 @@ export async function renderPainelAluno(el) {
 
     <h2 class="secao-titulo">Minhas aulas</h2>
     ${temAulas ? `<div class="minhas-aulas">${alunos.flatMap((a) => a.matriculas.map((m) => cartaoAula(a, m, porMatricula[m.id], varios, hoje))).join('')}</div>`
-      : `<div class="card">${vazio('Você ainda não está inscrito em nenhuma aula.')}<p style="text-align:center;margin:0 0 6px"><a class="btn" href="#/aulas">Ver aulas e me inscrever</a></p></div>`}`;
+      : `<div class="card">${vazio('Você ainda não está inscrito em nenhuma aula.')}<p style="text-align:center;margin:0 0 6px"><a class="btn" href="#/aulas">Ver aulas e me inscrever</a></p></div>`}
+
+    ${alunos.length ? `
+    <h2 class="secao-titulo">Minha família</h2>
+    <section class="card familia">
+      <ul class="familia-lista">${alunos.map((a) => `
+        <li><div class="familia-item">${avatarHTML(a.foto, quem(a), 40)}
+          <div><strong>${esc(quem(a))}</strong><small class="sub">${quem(a) === a.nome ? 'você' : 'dependente'} · ${a.matriculas.length ? `${a.matriculas.length} aula(s)` : 'sem aulas'}</small></div></div></li>`).join('')}</ul>
+      <p class="sub" style="margin:10px 0 12px">Vai inscrever um filho ou outro dependente? Cadastre aqui: cada um tem a própria ficha e turma, e você paga tudo junto neste painel.</p>
+      <button class="btn sec" type="button" id="add-dependente">＋ Adicionar dependente</button>
+    </section>` : ''}`;
 
   el.querySelector('#ja-paguei').onclick = () => informarPagamento({ total, vencimento: vencimento || proximo, aPagar }, () => renderPainelAluno(el));
   ativarFotos(el);
@@ -115,10 +125,49 @@ export async function renderPainelAluno(el) {
     if (mat) pedirTrancamento(mat, () => renderPainelAluno(el));
   });
   el.querySelector('#comprovante').onclick = () => enviarComprovante(alunos);
+  el.querySelector('#add-dependente')?.addEventListener('click', adicionarDependente);
   el.querySelector('#pagar-pix')?.addEventListener('click', () => pagarComPix({ total: aPagar.length ? total : null, vencimento }, () => enviarComprovante(alunos)));
   if (!grupoOferecido) { grupoOferecido = true; oferecerGrupos(alunos); }
 }
 let grupoOferecido = false; // a janela do grupo aparece uma vez por visita ao app (até o aluno entrar no grupo)
+
+// ------------------------------------------------------------------ dependente
+/** O responsável cadastra um dependente; em seguida o app pede a foto e o PAR-Q dele. */
+function adicionarDependente() {
+  const m = abrirModal({
+    titulo: 'Adicionar dependente',
+    largura: 460,
+    corpo: `
+      <p class="sub" style="margin:0 0 12px">Cadastre quem vai fazer as aulas (filho, filha ou outro dependente). Você continua sendo o responsável: as cobranças vêm para você.</p>
+      <form id="f-dep" novalidate>
+        <label class="campo"><span>Nome completo do dependente *</span><input type="text" name="nome" maxlength="120" autocomplete="off" required></label>
+        <label class="campo"><span>Data de nascimento *</span><input type="date" name="nasc" max="${hojeISO()}" required></label>
+        <small class="sub">Depois de adicionar, o app pede a foto e o questionário de saúde (PAR-Q) do dependente.</small>
+        <div id="dep-erro"></div>
+        <div class="acoes">
+          <button class="btn sec" type="button" data-cancelar>Cancelar</button>
+          <button class="btn" type="submit">Adicionar</button>
+        </div>
+      </form>`,
+  });
+  const form = m.el.querySelector('#f-dep');
+  const erro = (t) => { m.el.querySelector('#dep-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
+  m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!form.nome.value.trim()) return erro('Informe o nome completo do dependente.');
+    if (!form.nasc.value) return erro('Informe a data de nascimento.');
+    erro('');
+    await comBotao(form.querySelector('[type=submit]'), async () => {
+      try {
+        ok(await sb.rpc('adicionar_dependente', { p_base: null, p_nome: form.nome.value.trim(), p_nascimento: form.nasc.value }));
+        m.fechar();
+        toast('Dependente adicionado. Agora envie a foto e responda o PAR-Q.');
+        setTimeout(() => location.reload(), 900); // o app abre a etapa de foto e PAR-Q do dependente
+      } catch (err) { erro(err.message); }
+    });
+  });
+}
 
 // ------------------------------------------------------------------ Pix
 const ICONE_PIX = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5 21.5 12 12 21.5 2.5 12z"/><path d="M7.5 7.5 12 12l4.5-4.5M7.5 16.5 12 12l4.5 4.5"/></svg>';

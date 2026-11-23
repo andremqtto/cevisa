@@ -107,7 +107,7 @@ export function ligarCampoFoto(form) {
 }
 
 /** Reduz a foto (lado maior 800 px, JPEG) — fotos de celular chegam com vários MB. */
-async function reduzir(arquivo, lado = 800) {
+export async function reduzirImagem(arquivo, lado = 800) {
   const url = URL.createObjectURL(arquivo);
   try {
     const img = await new Promise((res, rej) => {
@@ -129,7 +129,7 @@ async function reduzir(arquivo, lado = 800) {
 
 /** Envia a foto da ficha e grava no cadastro. Devolve o caminho novo. */
 export async function salvarFoto(alunoId, arquivo) {
-  const blob = await reduzir(arquivo);
+  const blob = await reduzirImagem(arquivo);
   if (!blob) throw new Error('Não foi possível preparar a foto. Tente outra imagem.');
   const caminho = `${alunoId}/${crypto.randomUUID()}.jpg`;
   ok(await sb.storage.from(BUCKET).upload(caminho, blob, { contentType: 'image/jpeg' }));

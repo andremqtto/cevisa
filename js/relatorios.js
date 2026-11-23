@@ -55,7 +55,7 @@ export async function renderRelatorios(el) {
         <div class="kpi"><span>Novos alunos</span><strong>${r.novos_alunos}</strong><small>cadastrados no mês</small></div>
         <div class="kpi"><span>Planos contratados</span><strong>${totalPlanos}</strong>
           <small>${r.planos.length ? r.planos.map((p) => `${p.qtd} ${planoLabel(p.plano).toLowerCase()}`).join(' · ') : 'nenhum no mês'}</small></div>
-        <div class="kpi verde"><span>Mensalidades recebidas</span><strong>${money(r.recebido)}</strong><small>${r.recebimentos.length} pagamento(s) no mês</small></div>
+        <div class="kpi verde"><span>Mensalidades recebidas</span><strong>${money(r.recebido)}</strong><small>${r.recebimentos.length} pagamento(s) no mês${r.recebimentos.some((p) => p.parcelas > 1) ? ' · cartão parcelado conta 1 parcela por mês' : ''}</small></div>
         <div class="kpi verde"><span>Diárias recebidas</span><strong>${money(diarias)}</strong><small>${listaDiarias.length} diária(s) no mês</small></div>
         <div class="kpi verde"><span>Total recebido</span><strong>${money(Number(r.recebido) + diarias)}</strong><small>mensalidades + diárias</small></div>
         <div class="kpi"><span>A receber</span><strong>${money(r.a_receber)}</strong><small>cobranças pendentes com vencimento no mês</small></div>
@@ -80,7 +80,9 @@ export async function renderRelatorios(el) {
           <thead><tr><th>Data</th><th>Aluno</th><th>Plano</th><th>Forma</th><th class="num">Valor</th></tr></thead>
           <tbody>${r.recebimentos.map((p) => `<tr>
             <td>${fmtDate(p.pago_em)}</td><td><a href="#/alunos/${p.aluno_id}">${esc(p.aluno)}</a></td>
-            <td>${planoLabel(p.plano)}</td><td>${esc(p.forma || '—')}</td><td class="num">${money(p.valor)}</td></tr>`).join('')}</tbody>
+            <td>${planoLabel(p.plano)}</td>
+            <td>${esc(p.forma || '—')}${p.parcelas > 1 ? `<br><small class="sub">parcela ${p.parcela}/${p.parcelas} · total ${money(p.valor_total)}</small>` : ''}</td>
+            <td class="num">${money(p.valor)}</td></tr>`).join('')}</tbody>
           <tfoot><tr><td colspan="4"><strong>Total</strong></td><td class="num"><strong>${money(r.recebido)}</strong></td></tr></tfoot></table></div>`
           : vazio('Nenhum pagamento recebido neste mês.')}
       </section>

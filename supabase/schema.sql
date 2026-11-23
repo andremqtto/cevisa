@@ -459,6 +459,21 @@ returns numeric language sql stable security definer set search_path = public as
 $$;
 revoke all on function public._preco_aluno(uuid, uuid, text) from public, anon, authenticated;
 
+-- Desconto na matrícula ("Inscrever com desconto"): valor combinado que substitui o preço do plano
+-- em TODAS as cobranças dessa matrícula, enquanto durar (o gestor pode mudar ou retirar na ficha).
+alter table public.matriculas add column if not exists valor_personalizado numeric(10,2)
+  check (valor_personalizado is null or valor_personalizado >= 0);
+alter table public.matriculas add column if not exists desconto_motivo text;
+alter table public.matriculas add column if not exists desconto_em     timestamptz;
+
+-- Preço que vale para a matrícula: o desconto, se houver; senão o preço do plano conforme o vínculo.
+create or replace function public._preco_matricula(p_matricula uuid)
+returns numeric language sql stable security definer set search_path = public as $$
+  select coalesce(m.valor_personalizado, public._preco_aluno(m.aluno_id, m.aula_id, m.plano))
+    from public.matriculas m where m.id = p_matricula;
+$$;
+revoke all on function public._preco_matricula(uuid) from public, anon, authenticated;
+
 -- Cobranças pendentes de valor ZERO de funcionário são quitadas automaticamente e renovam o plano.
 create or replace function public._quitar_isentos(p_matricula uuid)
 returns void language plpgsql security definer set search_path = public as $$
@@ -466,9 +481,12 @@ declare p public.pagamentos;
 begin
   for p in select pg.* from public.pagamentos pg join public.matriculas m on m.id = pg.matricula_id
             where pg.matricula_id = p_matricula and pg.status = 'pendente' and pg.valor = 0 and m.status = 'ativa'
-              and public._preco_aluno(m.aluno_id, m.aula_id, pg.plano) = 0
+              and public._preco_matricula(m.id) = 0
             for update of pg loop
-    update public.pagamentos set status = 'pago', pago_em = current_date, forma = 'Isento (funcionário)' where id = p.id;
+    update public.pagamentos set status = 'pago', pago_em = current_date,
+           forma = case when (select valor_personalizado from public.matriculas where id = p.matricula_id) is not null
+                        then 'Isento (desconto)' else 'Isento (funcionário)' end
+     where id = p.id;
     update public.matriculas set data_fim = (data_fim + make_interval(months => p.meses))::date where id = p.matricula_id;
     update public.notificacoes set lida = true
      where matricula_id = p.matricula_id and tipo in ('vence_em_breve','vencido');
@@ -487,7 +505,7 @@ begin
   insert into public.pagamentos (matricula_id, aluno_id, plano, meses, competencia, valor, vencimento)
   values (m.id, m.aluno_id, m.plano, public._meses_do_plano(m.plano),
           date_trunc('month', m.data_fim)::date,
-          coalesce(public._preco_aluno(m.aluno_id, m.aula_id, m.plano), 0),
+          coalesce(public._preco_matricula(m.id), 0),
           m.data_fim);
   -- funcionário (valor zero): não há o que cobrar — quita e renova o plano na hora
   perform public._quitar_isentos(m.id);
@@ -620,14 +638,19 @@ end $$;
 -- Inscreve o aluno (numa turma, se a aula tiver turmas); se não houver vaga entra na lista de espera.
 -- Retorna: { matricula_id, status, posicao_espera }
 drop function if exists public.inscrever_aluno(uuid, uuid, text, date);
+-- p_valor/p_motivo: "Inscrever com desconto" (valor combinado de cada cobrança e o motivo).
+drop function if exists public.inscrever_aluno(uuid, uuid, text, date, uuid);
 create or replace function public.inscrever_aluno(p_aluno uuid, p_aula uuid, p_plano text,
-                                                  p_inicio date default current_date, p_turma uuid default null)
+                                                  p_inicio date default current_date, p_turma uuid default null,
+                                                  p_valor numeric default null, p_motivo text default null)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare
   v_vagas int; v_ocupadas int; v_id uuid; v_status text; v_pos int;
 begin
   if not public.is_gestor() then raise exception 'Acesso negado.'; end if;
   if p_plano not in ('mensal','semestral','anual') then raise exception 'Plano inválido.'; end if;
+  if p_valor is not null and p_valor < 0 then raise exception 'Valor com desconto inválido.'; end if;
+  if p_valor is not null and nullif(trim(p_motivo), '') is null then raise exception 'Informe o motivo do desconto.'; end if;
 
   perform 1 from public.aulas where id = p_aula and ativa for update;
   if not found then raise exception 'Aula não encontrada ou oculta.'; end if;
@@ -654,8 +677,11 @@ begin
     v_status := 'espera';
   end if;
 
-  insert into public.matriculas (aluno_id, aula_id, turma_id, plano, status, data_inicio, data_fim)
-  values (p_aluno, p_aula, p_turma, p_plano, v_status, coalesce(p_inicio, current_date), coalesce(p_inicio, current_date))
+  insert into public.matriculas (aluno_id, aula_id, turma_id, plano, status, data_inicio, data_fim,
+                                 valor_personalizado, desconto_motivo, desconto_em)
+  values (p_aluno, p_aula, p_turma, p_plano, v_status, coalesce(p_inicio, current_date), coalesce(p_inicio, current_date),
+          round(p_valor, 2), case when p_valor is not null then left(trim(p_motivo), 300) end,
+          case when p_valor is not null then now() end)
   returning id into v_id;
 
   -- conclui o pedido de inscrição feito pelo aluno no app (se houver)
@@ -772,7 +798,7 @@ begin
     else
       insert into public.pagamentos (matricula_id, aluno_id, plano, meses, competencia, valor, vencimento, status, pago_em, forma)
       values (m.id, m.aluno_id, 'mensal', 1, v_comp,
-              coalesce(public._preco_aluno(m.aluno_id, m.aula_id, 'mensal'), 0),
+              coalesce(public._preco_matricula(m.id), 0),
               m.data_fim, 'pago', coalesce(p_data, current_date), nullif(trim(p_forma), ''));
       update public.matriculas set data_fim = (data_fim + interval '1 month')::date where id = m.id;
     end if;
@@ -788,7 +814,9 @@ begin
   if not public.is_gestor() then raise exception 'Acesso negado.'; end if;
   if coalesce(array_length(p_matriculas, 1), 0) = 0 then raise exception 'Escolha pelo menos uma aula.'; end if;
   foreach v_mat in array p_matriculas loop
-    if not exists (select 1 from public.matriculas where id = v_mat and aluno_id = p_aluno and status = 'ativa') then
+    -- vale para as aulas do aluno e dos dependentes da mesma família (a cobrança é do responsável)
+    if not exists (select 1 from public.matriculas where id = v_mat and status = 'ativa'
+                    and aluno_id in (select public._familia(p_aluno))) then
       raise exception 'Matrícula não encontrada para este aluno.';
     end if;
     select * into p from public.pagamentos where matricula_id = v_mat and status = 'pendente' order by vencimento limit 1;
@@ -802,7 +830,7 @@ begin
     end if;
   end loop;
   update public.notificacoes set lida = true
-   where aluno_id = p_aluno and tipo in ('pagamento_informado','comprovante_enviado');
+   where aluno_id in (select public._familia(p_aluno)) and tipo in ('pagamento_informado','comprovante_enviado');
   return v_qtd;
 end $$;
 revoke all on function public.confirmar_pagamento_aluno(uuid, uuid[], text, date) from public, anon;
@@ -1022,10 +1050,11 @@ begin
           'novas_matriculas', (select count(*) from public.matriculas m where m.aula_id = au.id and m.status <> 'espera'
                                  and (m.created_at at time zone 'America/Sao_Paulo')::date >= v_ini
                                  and (m.created_at at time zone 'America/Sao_Paulo')::date <  v_fim),
-          'recebido',  coalesce((select sum(p.valor) from public.pagamentos p join public.matriculas m on m.id = p.matricula_id
-                                  where m.aula_id = au.id and p.status = 'pago' and p.pago_em >= v_ini and p.pago_em < v_fim), 0),
-          'pagamentos', (select count(*) from public.pagamentos p join public.matriculas m on m.id = p.matricula_id
-                                  where m.aula_id = au.id and p.status = 'pago' and p.pago_em >= v_ini and p.pago_em < v_fim),
+          -- cartão parcelado: cada parcela entra no mês em que cai (ver _entradas)
+          'recebido',  coalesce((select sum(e.valor) from public._entradas(v_ini, v_fim) e join public.matriculas m on m.id = e.matricula_id
+                                  where m.aula_id = au.id), 0),
+          'pagamentos', (select count(*) from public._entradas(v_ini, v_fim) e join public.matriculas m on m.id = e.matricula_id
+                                  where m.aula_id = au.id),
           'a_receber', coalesce((select sum(p.valor) from public.pagamentos p join public.matriculas m on m.id = p.matricula_id
                                   where m.aula_id = au.id and p.status = 'pendente' and p.vencimento >= v_ini and p.vencimento < v_fim), 0),
           'em_debito', coalesce((select sum(p.valor) from public.pagamentos p join public.matriculas m on m.id = p.matricula_id
@@ -1037,15 +1066,14 @@ begin
         from public.aulas au) s), '[]'::jsonb),
     'diarias_sem_modalidade', coalesce((select sum(valor) from public.diarias
                                          where aula_id is null and data >= v_ini and data < v_fim), 0),
-    'recebido',   coalesce((select sum(valor) from public.pagamentos
-                             where status = 'pago' and pago_em >= v_ini and pago_em < v_fim), 0),
+    'recebido',   coalesce((select sum(valor) from public._entradas(v_ini, v_fim)), 0),
     'a_receber',  coalesce((select sum(valor) from public.pagamentos
                              where status = 'pendente' and vencimento >= v_ini and vencimento < v_fim), 0),
     'recebimentos', coalesce((select jsonb_agg(jsonb_build_object(
-                         'pagamento_id', p.id, 'aluno_id', p.aluno_id, 'aluno', a.nome, 'plano', p.plano,
-                         'valor', p.valor, 'pago_em', p.pago_em, 'forma', p.forma) order by p.pago_em, a.nome)
-                       from public.pagamentos p join public.alunos a on a.id = p.aluno_id
-                       where p.status = 'pago' and p.pago_em >= v_ini and p.pago_em < v_fim), '[]'::jsonb),
+                         'pagamento_id', e.pagamento_id, 'aluno_id', e.aluno_id, 'aluno', a.nome, 'plano', e.plano,
+                         'valor', e.valor, 'pago_em', e.data, 'forma', e.forma,
+                         'parcela', e.parcela, 'parcelas', e.parcelas, 'valor_total', e.valor_total) order by e.data, a.nome)
+                       from public._entradas(v_ini, v_fim) e join public.alunos a on a.id = e.aluno_id), '[]'::jsonb),
     'em_debito',  coalesce((select jsonb_agg(jsonb_build_object(
                          'pagamento_id', p.id, 'aluno_id', p.aluno_id, 'aluno', a.nome, 'telefone', a.telefone,
                          'plano', p.plano, 'valor', p.valor, 'vencimento', p.vencimento,
@@ -1058,14 +1086,14 @@ begin
 end $$;
 
 revoke all on function public.atualizar_pendencias()                        from public, anon;
-revoke all on function public.inscrever_aluno(uuid, uuid, text, date, uuid) from public, anon;
+revoke all on function public.inscrever_aluno(uuid, uuid, text, date, uuid, numeric, text) from public, anon;
 revoke all on function public.encerrar_matricula(uuid)                      from public, anon;
 revoke all on function public.registrar_pagamento(uuid, text, date)         from public, anon;
 revoke all on function public.trancar_mes(uuid, date)                       from public, anon;
 revoke all on function public.desfazer_trancamento(uuid)                    from public, anon;
 revoke all on function public.relatorio_mensal(int, int)                    from public, anon;
 grant execute on function public.atualizar_pendencias()                     to authenticated;
-grant execute on function public.inscrever_aluno(uuid, uuid, text, date, uuid) to authenticated;
+grant execute on function public.inscrever_aluno(uuid, uuid, text, date, uuid, numeric, text) to authenticated;
 grant execute on function public.encerrar_matricula(uuid)                   to authenticated;
 grant execute on function public.registrar_pagamento(uuid, text, date)      to authenticated;
 grant execute on function public.trancar_mes(uuid, date)                    to authenticated;
@@ -1112,7 +1140,7 @@ begin
                        'tranc_pedido', (select jsonb_build_object('mes', tp.mes, 'status', tp.status) from public.trancamento_pedidos tp
                                          where tp.matricula_id = m.id and tp.mes >= date_trunc('month', current_date)::date
                                          order by tp.created_at desc limit 1),
-                       'preco', public._preco_aluno(a.id, m.aula_id, m.plano),
+                       'preco', public._preco_matricula(m.id),
                        'pendente', (select jsonb_build_object('id', p.id, 'valor', p.valor, 'vencimento', p.vencimento)
                                       from public.pagamentos p
                                      where p.matricula_id = m.id and p.status = 'pendente'
@@ -1144,6 +1172,8 @@ declare
   a record; v_total numeric; v_venc date; v_msg text; v_qtd int := 0;
   v_forma text := left(nullif(trim(p_forma), ''), 40);
   v_obs   text := left(nullif(trim(p_obs), ''), 300);
+  -- família (responsável com dependentes): um aviso só, com o total de todos
+  v_soma numeric := 0; v_min date; v_nomes text[] := '{}'; v_resp text; v_primeiro uuid;
 begin
   if auth.uid() is null then raise exception 'Acesso negado.'; end if;
   if exists (select 1 from public.notificacoes n join public.alunos al on al.id = n.aluno_id
@@ -1151,24 +1181,31 @@ begin
                 and n.created_at > now() - interval '10 minutes') then
     raise exception 'Você já avisou o pagamento há poucos minutos. O gestor já foi notificado.';
   end if;
-  for a in select id, nome from public.alunos where user_id = auth.uid() order by nome loop
-    select sum(coalesce(p.valor, public._preco_aluno(m.aluno_id, m.aula_id, m.plano), 0)),
+  for a in select al.id, al.nome, public._participante(al) as quem from public.alunos al
+            where al.user_id = auth.uid() order by al.participante_proprio desc, al.created_at loop
+    select sum(coalesce(p.valor, public._preco_matricula(m.id), 0)),
            min(coalesce(p.vencimento, m.data_fim))
       into v_total, v_venc
       from public.matriculas m
       left join public.pagamentos p on p.matricula_id = m.id and p.status = 'pendente'
      where m.aluno_id = a.id and m.status = 'ativa';
     continue when v_venc is null;
-    v_msg := a.nome || ' informou que pagou a(s) mensalidade(s): R$ '
-             || replace(to_char(coalesce(v_total, 0), 'FM999999990.00'), '.', ',')
-             || ' (vencimento ' || to_char(v_venc, 'DD/MM/YYYY') || ').'
-             || coalesce(' Forma: ' || v_forma || '.', '')
-             || coalesce(' Obs.: ' || v_obs, '');
-    insert into public.notificacoes (tipo, aluno_id, referencia, mensagem)
-    values ('pagamento_informado', a.id, current_date, v_msg);
+    v_soma := v_soma + coalesce(v_total, 0);
+    v_min := least(coalesce(v_min, v_venc), v_venc);
+    v_nomes := v_nomes || a.quem;
+    v_resp := coalesce(v_resp, a.nome);
+    v_primeiro := coalesce(v_primeiro, a.id);
     v_qtd := v_qtd + 1;
   end loop;
   if v_qtd = 0 then raise exception 'Você não tem mensalidades ativas para informar.'; end if;
+  v_msg := v_resp || ' informou que pagou a(s) mensalidade(s)'
+           || case when v_qtd > 1 or v_nomes[1] <> v_resp then ' de ' || array_to_string(v_nomes, ', ') else '' end
+           || ': R$ ' || replace(to_char(v_soma, 'FM999999990.00'), '.', ',')
+           || ' (vencimento ' || to_char(v_min, 'DD/MM/YYYY') || ').'
+           || coalesce(' Forma: ' || v_forma || '.', '')
+           || coalesce(' Obs.: ' || v_obs, '');
+  insert into public.notificacoes (tipo, aluno_id, referencia, mensagem)
+  values ('pagamento_informado', v_primeiro, current_date, v_msg);
   return v_qtd;
 end $$;
 
@@ -1355,7 +1392,7 @@ begin
   update public.alunos set vinculo = p_vinculo, vinculo_declarado = p_vinculo where id = p_aluno;
   if not found then raise exception 'Aluno não encontrado.'; end if;
   update public.pagamentos p
-     set valor = coalesce(public._preco_aluno(m.aluno_id, m.aula_id, m.plano), p.valor)
+     set valor = coalesce(public._preco_matricula(m.id), p.valor)
     from public.matriculas m
    where m.id = p.matricula_id and p.aluno_id = p_aluno and p.status = 'pendente';
   for v_mat in select id from public.matriculas where aluno_id = p_aluno and status = 'ativa' loop
@@ -1786,3 +1823,181 @@ end $$;
 -- insert into public.gestores (user_id, nome)
 -- select id, 'Nome do gestor' from auth.users where email = 'gestor@exemplo.com';
 -- =====================================================================
+
+-- =====================================================================
+-- Desconto na matrícula, planos semestral/anual parcelados no cartão e
+-- comprovante anexado pela equipe em cobranças pagas.
+-- =====================================================================
+
+-- O gestor muda ou retira o desconto de uma matrícula (p_valor null = volta ao preço normal).
+-- A cobrança pendente dessa matrícula passa a usar o novo valor.
+create or replace function public.definir_desconto(p_matricula uuid, p_valor numeric, p_motivo text default null)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_gestor() then raise exception 'Acesso negado.'; end if;
+  if p_valor is not null and p_valor < 0 then raise exception 'Valor com desconto inválido.'; end if;
+  if p_valor is not null and nullif(trim(p_motivo), '') is null then raise exception 'Informe o motivo do desconto.'; end if;
+  update public.matriculas
+     set valor_personalizado = round(p_valor, 2),
+         desconto_motivo = case when p_valor is not null then left(trim(p_motivo), 300) end,
+         desconto_em     = case when p_valor is not null then now() end
+   where id = p_matricula and status in ('ativa','espera');
+  if not found then raise exception 'Matrícula ativa não encontrada.'; end if;
+  update public.pagamentos set valor = coalesce(public._preco_matricula(p_matricula), valor)
+   where matricula_id = p_matricula and status = 'pendente';
+  perform public._quitar_isentos(p_matricula);
+end $$;
+revoke all on function public.definir_desconto(uuid, numeric, text) from public, anon;
+grant execute on function public.definir_desconto(uuid, numeric, text) to authenticated;
+
+-- Em quantas vezes o pagamento foi dividido no cartão (1 = à vista).
+alter table public.pagamentos add column if not exists parcelas integer not null default 1
+  check (parcelas between 1 and 24);
+
+-- Entradas de dinheiro no período: pagamento à vista entra inteiro na data do pagamento;
+-- parcelado no cartão entra 1/N por mês (a 1ª parcela na data do pagamento, as demais nos meses seguintes).
+-- Os centavos que sobram da divisão ficam na 1ª parcela.
+create or replace function public._entradas(p_ini date, p_fim date)
+returns table (pagamento_id uuid, matricula_id uuid, aluno_id uuid, plano text, forma text, pago_em date,
+               data date, parcela int, parcelas int, valor numeric, valor_total numeric)
+language sql stable security definer set search_path = public as $$
+  select p.id, p.matricula_id, p.aluno_id, p.plano, p.forma, p.pago_em,
+         (p.pago_em + make_interval(months => k))::date, k + 1, p.parcelas,
+         case when k = 0 then p.valor - round(p.valor / p.parcelas, 2) * (p.parcelas - 1)
+              else round(p.valor / p.parcelas, 2) end,
+         p.valor
+    from public.pagamentos p
+    cross join lateral generate_series(0, p.parcelas - 1) k
+   where p.status = 'pago' and p.pago_em is not null
+     and p.pago_em < p_fim
+     and (p.pago_em + make_interval(months => k))::date >= p_ini
+     and (p.pago_em + make_interval(months => k))::date <  p_fim;
+$$;
+revoke all on function public._entradas(date, date) from public, anon, authenticated;
+
+-- "Lançar semestral" / "Lançar anual" (aba Cobranças): quita o próximo período do plano
+-- (6 ou 12 meses) e registra em quantas vezes foi dividido no cartão.
+create or replace function public.lancar_plano(p_matricula uuid, p_parcelas int default 1,
+                                               p_forma text default null, p_data date default current_date)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare m public.matriculas; p public.pagamentos;
+begin
+  if not public.is_gestor() then raise exception 'Acesso negado.'; end if;
+  if p_parcelas is null or p_parcelas < 1 or p_parcelas > 24 then raise exception 'Número de parcelas inválido (1 a 24).'; end if;
+  if p_data > current_date then raise exception 'A data do pagamento não pode ser no futuro.'; end if;
+  select * into m from public.matriculas where id = p_matricula for update;
+  if not found or m.status <> 'ativa' then raise exception 'Matrícula ativa não encontrada.'; end if;
+  if m.plano not in ('semestral','anual') then raise exception 'Esta matrícula não é do plano semestral ou anual.'; end if;
+  perform public._criar_cobranca(m.id);
+  select * into p from public.pagamentos
+   where matricula_id = m.id and status = 'pendente' order by vencimento limit 1;
+  if not found then raise exception 'Não há valor a cobrar neste plano (isento).'; end if;
+  update public.pagamentos set parcelas = p_parcelas where id = p.id;
+  perform public.registrar_pagamento(p.id, p_forma, p_data);
+  return p.id;
+end $$;
+revoke all on function public.lancar_plano(uuid, int, text, date) from public, anon;
+grant execute on function public.lancar_plano(uuid, int, text, date) to authenticated;
+
+-- Comprovante anexado pela equipe a uma cobrança já paga (imagem no bucket privado "comprovantes",
+-- na pasta do usuário da equipe). Aparece na cobrança e na ficha do aluno.
+alter table public.comprovantes add column if not exists pagamento_id uuid references public.pagamentos(id) on delete set null;
+create index if not exists comprovantes_pagamento_idx on public.comprovantes (pagamento_id);
+
+create or replace function public.anexar_comprovante(p_pagamento uuid, p_arquivo text, p_nome text default null)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare p public.pagamentos; v_id uuid;
+begin
+  if not public.is_gestor() then raise exception 'Acesso negado.'; end if;
+  select * into p from public.pagamentos where id = p_pagamento;
+  if not found then raise exception 'Cobrança não encontrada.'; end if;
+  if p.status <> 'pago' then raise exception 'Só é possível anexar comprovante em cobrança paga.'; end if;
+  if split_part(p_arquivo, '/', 1) <> auth.uid()::text
+     or not exists (select 1 from storage.objects where bucket_id = 'comprovantes' and name = p_arquivo) then
+    raise exception 'Arquivo não encontrado. Tente enviar de novo.';
+  end if;
+  insert into public.comprovantes (aluno_id, arquivo, nome_arquivo, observacao, email_enviado, pagamento_id)
+  values (p.aluno_id, p_arquivo, left(nullif(trim(p_nome), ''), 120), 'Anexado pela equipe', true, p.id)
+  returning id into v_id;
+  return v_id;
+end $$;
+revoke all on function public.anexar_comprovante(uuid, text, text) from public, anon;
+grant execute on function public.anexar_comprovante(uuid, text, text) to authenticated;
+
+notify pgrst, 'reload schema';
+
+-- =====================================================================
+-- Família: o responsável (pai/mãe) cadastra dependentes. Cada pessoa que faz aula tem a
+-- própria ficha (foto, PAR-Q, turma), todas ligadas ao mesmo acesso do responsável, que vê
+-- e paga tudo junto. A ficha do dependente repete os contatos do responsável (cobrança,
+-- WhatsApp e e-mail vão para ele) e aponta para a ficha principal em responsavel_id.
+-- =====================================================================
+alter table public.alunos add column if not exists responsavel_id uuid references public.alunos(id) on delete set null;
+create index if not exists alunos_responsavel_idx on public.alunos (responsavel_id);
+
+-- Fichas da mesma família: a principal, as que apontam para ela e as do mesmo acesso/e-mail.
+create or replace function public._familia(p_aluno uuid)
+returns setof uuid language sql stable security definer set search_path = public as $$
+  with base as (select a.* from public.alunos a where a.id = p_aluno),
+       raiz as (select r.* from public.alunos r join base b on r.id = coalesce(b.responsavel_id, b.id))
+  select distinct x.id from public.alunos x, raiz r
+   where x.id = p_aluno or x.id = r.id or x.responsavel_id = r.id
+      or (r.user_id is not null and x.user_id = r.user_id)
+      or (nullif(trim(r.email), '') is not null and lower(trim(x.email)) = lower(trim(r.email)));
+$$;
+revoke all on function public._familia(uuid) from public, anon, authenticated;
+
+-- Fichas da família de um aluno (para o quadro "Família" da ficha). Só a equipe.
+create or replace function public.familia_aluno(p_aluno uuid)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+begin
+  if not public.is_gestor() then raise exception 'Acesso negado.'; end if;
+  return coalesce((select jsonb_agg(jsonb_build_object(
+            'id', a.id, 'nome', a.nome, 'participante', public._participante(a), 'foto', a.foto,
+            'ativo', a.ativo, 'principal', a.responsavel_id is null,
+            'aulas', (select count(*) from public.matriculas m where m.aluno_id = a.id and m.status in ('ativa','espera')))
+           order by (a.responsavel_id is not null), a.created_at)
+    from public.alunos a where a.id in (select public._familia(p_aluno))), '[]'::jsonb);
+end $$;
+revoke all on function public.familia_aluno(uuid) from public, anon;
+grant execute on function public.familia_aluno(uuid) to authenticated;
+
+-- Adiciona um dependente. O responsável (no app, p_base = null) ou a equipe (p_base = ficha do responsável).
+-- A nova ficha copia os dados de contato e o aceite do termo do responsável; foto e PAR-Q do
+-- dependente são pedidos ao responsável no próximo acesso ao app.
+create or replace function public.adicionar_dependente(p_base uuid, p_nome text, p_nascimento date default null)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare b public.alunos; v_id uuid; v_nome text := left(trim(coalesce(p_nome, '')), 120);
+begin
+  if auth.uid() is null then raise exception 'Acesso negado.'; end if;
+  if public.is_gestor() and p_base is not null then
+    select * into b from public.alunos where id = p_base;
+  else
+    select * into b from public.alunos
+     where user_id = auth.uid() and (p_base is null or id = p_base)
+     order by (responsavel_id is not null), participante_proprio desc, created_at limit 1;
+  end if;
+  if not found then raise exception 'Cadastro do responsável não encontrado.'; end if;
+  if v_nome = '' then raise exception 'Informe o nome completo do dependente.'; end if;
+  if p_nascimento is not null and p_nascimento > current_date then raise exception 'Data de nascimento inválida.'; end if;
+  if exists (select 1 from public.alunos a where a.id in (select public._familia(b.id))
+              and lower(public._participante(a)) = lower(v_nome)) then
+    raise exception '% já está cadastrado(a) na família.', v_nome;
+  end if;
+  if (select count(*) from public.alunos a where a.id in (select public._familia(b.id))) >= 10 then
+    raise exception 'Limite de fichas na família atingido. Fale com a recepção.';
+  end if;
+
+  insert into public.alunos (nome, cpf, telefone, email, endereco, user_id, ativo, cadastro_completo,
+                             participante_proprio, participante_nome, participante_nascimento,
+                             termo_aceito_em, termo_versao, vinculo, vinculo_declarado, criado_por, responsavel_id)
+  values (b.nome, b.cpf, b.telefone, b.email, b.endereco, b.user_id, true, true,
+          false, v_nome, p_nascimento,
+          b.termo_aceito_em, b.termo_versao, 'externo', 'externo', auth.uid(), coalesce(b.responsavel_id, b.id))
+  returning id into v_id;
+  return v_id;
+end $$;
+revoke all on function public.adicionar_dependente(uuid, text, date) from public, anon;
+grant execute on function public.adicionar_dependente(uuid, text, date) to authenticated;
+
+notify pgrst, 'reload schema';

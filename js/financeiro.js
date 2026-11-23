@@ -5,6 +5,7 @@ import {
   comBotao, carregando, vazio, erroBox, linkCobrancaWhatsApp, ICONE_WHATSAPP,
   primeiroDiaMes, precoVinculo, vinculoPreco, moneyOuIsento, nomeParticipante,
 } from './ui.js';
+import { reduzirImagem } from './fotos.js';
 
 const FORMAS = ['Pix', 'Dinheiro', 'Cartão de débito', 'Cartão de crédito', 'Boleto', 'Transferência'];
 
@@ -137,18 +138,24 @@ export async function confirmarPagamentoInformado({ alunoId, mensagem = '', nave
   let aluno, mats;
   try {
     aluno = ok(await sb.from('alunos').select('id,nome,participante_proprio,participante_nome,vinculo').eq('id', alunoId).single());
+    // família: as aulas dos dependentes também são cobradas do responsável
+    const rf = await sb.rpc('familia_aluno', { p_aluno: alunoId });
+    const ids = !rf.error && rf.data?.length ? rf.data.map((x) => x.id) : [alunoId];
     mats = ok(await sb.from('matriculas')
-      .select('id,plano,data_fim,aulas(nome,preco_mensal,preco_semestral,preco_anual),turmas(nome),pagamentos(id,valor,vencimento,status)')
-      .eq('aluno_id', alunoId).eq('status', 'ativa'));
+      .select('id,plano,data_fim,valor_personalizado,aluno_id,alunos(id,nome,participante_proprio,participante_nome,vinculo),aulas(nome,preco_mensal,preco_semestral,preco_anual),turmas(nome),pagamentos(id,valor,vencimento,status)')
+      .in('aluno_id', ids).eq('status', 'ativa'));
   } catch (e) { m.el.innerHTML = erroBox(e); return; }
 
   const hoje = hojeISO();
   const itens = mats.map((x) => {
     const pend = (x.pagamentos || []).filter((p) => p.status === 'pendente').sort((a, b) => a.vencimento.localeCompare(b.vencimento))[0];
-    const valor = pend ? Number(pend.valor) : precoVinculo(x.aulas?.[PRECO_PLANO[x.plano]], x.plano, vinculoPreco(aluno));
+    const valor = pend ? Number(pend.valor)
+      : x.valor_personalizado !== null ? Number(x.valor_personalizado)
+      : precoVinculo(x.aulas?.[PRECO_PLANO[x.plano]], x.plano, vinculoPreco(x.alunos || aluno));
     const venc = pend ? pend.vencimento : x.data_fim;
-    return { id: x.id, aula: x.aulas?.nome, turma: x.turmas?.nome, plano: x.plano, valor, venc, gerada: !!pend };
+    return { id: x.id, quem: nomeParticipante(x.alunos || aluno), aula: x.aulas?.nome, turma: x.turmas?.nome, plano: x.plano, valor, venc, gerada: !!pend };
   }).filter((i) => i.valor !== 0).sort((a, b) => a.venc.localeCompare(b.venc));
+  const variasPessoas = new Set(itens.map((i) => i.quem)).size > 1;
   const formaInformada = (mensagem.match(/Forma: ([^.]+)\./) || [])[1]?.trim();
   const ficha = () => { m.fechar(); navegar?.(`#/alunos/${alunoId}`); };
 
@@ -163,13 +170,14 @@ export async function confirmarPagamentoInformado({ alunoId, mensagem = '', nave
   }
 
   m.el.innerHTML = `
-    <p style="margin:0 0 4px"><strong>${esc(nomeParticipante(aluno))}</strong>${nomeParticipante(aluno) !== aluno.nome ? ` <small class="sub">resp.: ${esc(aluno.nome)}</small>` : ''}</p>
+    <p style="margin:0 0 4px">${variasPessoas ? `<strong>${esc(aluno.nome)}</strong> <small class="sub">responsável · ${[...new Set(itens.map((i) => i.quem))].map(esc).join(', ')}</small>`
+      : `<strong>${esc(nomeParticipante(aluno))}</strong>${nomeParticipante(aluno) !== aluno.nome ? ` <small class="sub">resp.: ${esc(aluno.nome)}</small>` : ''}`}</p>
     ${mensagem ? `<p class="sub" style="margin:0 0 12px">${esc(mensagem)}</p>` : ''}
     <form id="f-confirma" novalidate>
       <fieldset class="vinculo"><legend>Mensalidades pagas</legend>${itens.map((i) => {
         const d = diasEntre(hoje, i.venc);
         return `<label class="check vinculo-opcao"><input type="checkbox" name="mat" value="${i.id}" ${d <= 30 ? 'checked' : ''}>
-          <span><strong>${esc(i.aula)}</strong>${i.turma ? ` — ${esc(i.turma)}` : ''} · ${esc(planoLabel(i.plano))}
+          <span>${variasPessoas ? `<span class="sub">${esc(i.quem)}</span><br>` : ''}<strong>${esc(i.aula)}</strong>${i.turma ? ` — ${esc(i.turma)}` : ''} · ${esc(planoLabel(i.plano))}
             <small>${i.valor === null ? 'valor a combinar' : money(i.valor)} · vencimento ${fmtDate(i.venc)}${d < 0 ? ' <span class="badge erro">atrasada</span>' : ''}</small></span></label>`;
       }).join('')}</fieldset>
       <div class="grade2">
@@ -208,7 +216,7 @@ export async function confirmarPagamentoInformado({ alunoId, mensagem = '', nave
           p_aluno: alunoId, p_matriculas: sel, p_forma: form.forma.value, p_data: form.data.value || hoje,
         }));
         m.fechar();
-        toast(`Pagamento confirmado: ${qtd} mensalidade${qtd === 1 ? '' : 's'} de ${nomeParticipante(aluno)}.`);
+        toast(`Pagamento confirmado: ${qtd} mensalidade${qtd === 1 ? '' : 's'} de ${variasPessoas ? aluno.nome : nomeParticipante(aluno)}.`);
         aoConcluir?.();
       } catch (err) { erro(err.message); }
     });
@@ -223,11 +231,11 @@ const MESES_NOMES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
  * e os meses que faltam no ano. Os meses são sempre em sequência a partir do próximo em aberto.
  */
 export async function lancarMensalidade(aoConcluir) {
-  const m = abrirModal({ titulo: 'Lançar mensalidade', largura: 520, corpo: carregando() });
+  const m = abrirModal({ titulo: 'Lançar mensal', largura: 520, corpo: carregando() });
   let matriculas = [];
   try {
     matriculas = ok(await sb.from('matriculas')
-      .select('id,plano,data_fim,aluno_id,alunos(id,nome,ativo,participante_proprio,participante_nome,vinculo),aulas(nome,preco_mensal)')
+      .select('id,plano,data_fim,valor_personalizado,aluno_id,alunos(id,nome,ativo,participante_proprio,participante_nome,vinculo),aulas(nome,preco_mensal)')
       .eq('status', 'ativa'));
   } catch (e) { m.el.innerHTML = erroBox(e); return; }
 
@@ -350,7 +358,7 @@ export async function lancarMensalidade(aoConcluir) {
     if (qtd) qtd.textContent = sel.length ? `${sel.length} selecionado${sel.length > 1 ? 's' : ''}` : 'nenhum selecionado';
     const total = m.el.querySelector('#lm-total');
     if (!total) return;
-    const preco = precoVinculo(mat.aulas?.preco_mensal, 'mensal', vinculoPreco(aluno));
+    const preco = mat.valor_personalizado !== null ? Number(mat.valor_personalizado) : precoVinculo(mat.aulas?.preco_mensal, 'mensal', vinculoPreco(aluno));
     total.innerHTML = sel.length && preco !== null
       ? `<div class="aviso info">${sel.length} × ${moneyOuIsento(preco)} = <strong>${money(preco * sel.length)}</strong></div>` : '';
   }
@@ -390,6 +398,182 @@ export async function lancarMensalidade(aoConcluir) {
   });
 }
 
+// ------------------------------------------------------------------ lançar semestral / anual
+/**
+ * Quita o próximo período (6 ou 12 meses) de um aluno do plano semestral/anual e registra
+ * em quantas vezes foi dividido no cartão. No relatório, cada parcela entra no seu mês.
+ */
+export async function lancarPlano(plano, aoConcluir) {
+  const nomePlano = planoLabel(plano).toLowerCase();
+  const meses = plano === 'anual' ? 12 : 6;
+  const m = abrirModal({ titulo: `Lançar ${nomePlano}`, largura: 520, corpo: carregando() });
+  let matriculas = [];
+  try {
+    matriculas = ok(await sb.from('matriculas')
+      .select(`id,plano,data_fim,valor_personalizado,aluno_id,alunos(id,nome,participante_proprio,participante_nome,vinculo),aulas(nome,preco_${plano}),pagamentos(id,valor,vencimento,status)`)
+      .eq('status', 'ativa').eq('plano', plano));
+  } catch (e) { m.el.innerHTML = erroBox(e); return; }
+
+  const alunos = new Map();
+  for (const mt of matriculas) {
+    if (!mt.alunos) continue;
+    if (!alunos.has(mt.aluno_id)) alunos.set(mt.aluno_id, { ...mt.alunos, matriculas: [] });
+    alunos.get(mt.aluno_id).matriculas.push(mt);
+  }
+  const lista = [...alunos.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  const semAcento = (x) => (x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const hoje = hojeISO();
+  let aluno = null;
+  let mat = null;
+
+  // valor e período que serão quitados (a cobrança pendente, se houver; senão o preço do plano)
+  const proximo = (x) => {
+    const pend = (x.pagamentos || []).filter((p) => p.status === 'pendente').sort((a, b) => a.vencimento.localeCompare(b.vencimento))[0];
+    const valor = pend ? Number(pend.valor)
+      : x.valor_personalizado !== null ? Number(x.valor_personalizado)
+      : precoVinculo(x.aulas?.[`preco_${plano}`], plano, vinculoPreco(aluno));
+    const de = pend ? pend.vencimento : x.data_fim;
+    // mesmo dia, N meses depois (no fim do mês, como no banco: 31/01 + 1 mês = 28/02)
+    const alvo = primeiroDiaMes(de, meses);
+    const [y, mm] = alvo.split("-").map(Number);
+    const ultimo = new Date(Date.UTC(y, mm, 0)).getUTCDate();
+    const dia = String(Math.min(Number(de.slice(8, 10)), ultimo)).padStart(2, "0");
+    return { valor, de, ate: `${alvo.slice(0, 8)}${dia}` };
+  };
+
+  m.el.innerHTML = `
+    <form id="f-plano" novalidate>
+      <label class="campo"><span>Aluno *</span>
+        <input type="search" name="busca" placeholder="Digite o nome do aluno…" autocomplete="off"></label>
+      <div id="lp-resultados" class="lm-resultados"></div>
+      <div id="lp-escolhido"></div>
+      <div id="lp-erro"></div>
+      <div class="acoes">
+        <button class="btn sec" type="button" data-cancelar>Cancelar</button>
+        <button class="btn" type="submit" disabled>Confirmar</button>
+      </div>
+    </form>`;
+  const form = m.el.querySelector('#f-plano');
+  const resultados = m.el.querySelector('#lp-resultados');
+  const escolhido = m.el.querySelector('#lp-escolhido');
+  const btnOk = form.querySelector('[type=submit]');
+  const erro = (t) => { m.el.querySelector('#lp-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
+  m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
+
+  form.busca.addEventListener('input', () => {
+    const q = semAcento(form.busca.value.trim());
+    if (!q) { resultados.innerHTML = ''; return; }
+    const achados = lista.filter((a) => semAcento(`${a.nome} ${a.participante_nome || ''}`).includes(q)).slice(0, 8);
+    resultados.innerHTML = achados.length
+      ? achados.map((a) => `<button type="button" class="lm-item" data-aluno="${a.id}">
+          <strong>${esc(a.nome)}</strong>${a.participante_proprio === false && a.participante_nome ? ` <small>(${esc(a.participante_nome)})</small>` : ''}
+          <small>${a.matriculas.map((x) => esc(x.aulas?.nome)).join(' · ')}</small></button>`).join('')
+      : `<p class="sub" style="margin:0 0 12px">Nenhum aluno com plano ${nomePlano} ativo encontrado.</p>`;
+  });
+  resultados.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-aluno]');
+    if (!b) return;
+    aluno = alunos.get(b.dataset.aluno);
+    mat = aluno.matriculas.length === 1 ? aluno.matriculas[0] : null;
+    form.busca.value = aluno.nome;
+    resultados.innerHTML = '';
+    desenhar();
+  });
+
+  function desenhar() {
+    erro('');
+    let html = '';
+    if (aluno.matriculas.length > 1) {
+      html += `<fieldset class="vinculo"><legend>Aula *</legend>${aluno.matriculas.map((x) => `
+        <label class="check vinculo-opcao"><input type="radio" name="mat" value="${x.id}" ${mat?.id === x.id ? 'checked' : ''}>
+          <span>${esc(x.aulas?.nome)}<small>Pago até ${fmtDate(x.data_fim)}</small></span></label>`).join('')}</fieldset>`;
+    }
+    if (mat) {
+      const px = proximo(mat);
+      html += `
+        <div class="aviso info" style="margin-bottom:14px">${esc(mat.aulas?.nome)} · plano ${nomePlano}<br>
+          Período: <strong>${fmtDate(px.de)}</strong> a <strong>${fmtDate(px.ate)}</strong> · valor <strong>${px.valor === null ? 'sem preço' : money(px.valor)}</strong>${mat.valor_personalizado !== null ? ' <span class="badge info">com desconto</span>' : ''}</div>
+        <div class="grade2">
+          <label class="campo"><span>Dividido em quantas vezes? *</span>
+            <input type="number" name="parcelas" min="1" max="24" step="1" value="1" inputmode="numeric" required>
+            <small id="lp-parcela"></small></label>
+          <label class="campo"><span>Forma de pagamento</span>
+            <select name="forma">${FORMAS.map((f) => `<option ${f === 'Cartão de crédito' ? 'selected' : ''}>${f}</option>`).join('')}</select></label>
+        </div>
+        <label class="campo"><span>Data do pagamento</span>
+          <input type="date" name="data" value="${hoje}" max="${hoje}"></label>
+        <small class="sub">No relatório, o valor entra dividido: uma parcela por mês a partir da data do pagamento.</small>`;
+    }
+    escolhido.innerHTML = html;
+    btnOk.disabled = !mat;
+    parcela();
+  }
+  function parcela() {
+    const el = m.el.querySelector('#lp-parcela');
+    if (!el || !mat) return;
+    const n = Math.max(1, Math.min(24, parseInt(form.parcelas.value, 10) || 1));
+    const { valor } = proximo(mat);
+    el.textContent = valor && n > 1 ? `${n} × ${money(valor / n)}` : n === 1 ? 'À vista' : '';
+  }
+  escolhido.addEventListener('change', (e) => {
+    if (e.target.name === 'mat') { mat = aluno.matriculas.find((x) => x.id === e.target.value); desenhar(); }
+  });
+  escolhido.addEventListener('input', (e) => { if (e.target.name === 'parcelas') parcela(); });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!aluno) return erro('Escolha o aluno.');
+    if (!mat) return erro('Escolha a aula.');
+    const n = parseInt(form.parcelas.value, 10);
+    if (!(n >= 1 && n <= 24)) return erro('Informe em quantas vezes foi dividido (1 a 24).');
+    erro('');
+    await comBotao(btnOk, async () => {
+      try {
+        ok(await sb.rpc('lancar_plano', { p_matricula: mat.id, p_parcelas: n, p_forma: form.forma.value, p_data: form.data.value || hoje }));
+        m.fechar();
+        toast(`Plano ${nomePlano} de ${aluno.nome} lançado${n > 1 ? ` (${n}x)` : ''}.`);
+        aoConcluir?.();
+      } catch (err) { erro(err.message); }
+    });
+  });
+}
+
+// ------------------------------------------------------------------ comprovante anexado pela equipe
+const TIPOS_IMAGEM = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+
+/** Escolhe uma imagem e anexa como comprovante de uma cobrança paga. */
+export function anexarComprovante(pag, aoConcluir) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.onchange = async () => {
+    const f = input.files[0];
+    if (!f) return;
+    if (!f.type.startsWith('image/') && !TIPOS_IMAGEM.includes(f.type)) return toast('Escolha uma imagem (foto ou print do comprovante).', 'erro');
+    try {
+      toast('Enviando comprovante…');
+      const { data: { user } } = await sb.auth.getUser();
+      if (!user) throw new Error('Sua sessão expirou. Entre de novo.');
+      const blob = await reduzirImagem(f, 1600);
+      if (!blob) throw new Error('Não foi possível ler esta imagem. Tente outra.');
+      const caminho = `${user.id}/${crypto.randomUUID()}.jpg`;
+      ok(await sb.storage.from('comprovantes').upload(caminho, blob, { contentType: 'image/jpeg' }));
+      ok(await sb.rpc('anexar_comprovante', { p_pagamento: pag.id, p_arquivo: caminho, p_nome: f.name }));
+      toast('Comprovante anexado.');
+      aoConcluir?.();
+    } catch (err) { toast(err.message, 'erro'); }
+  };
+  input.click();
+}
+
+async function verComprovante(arquivo) {
+  try {
+    const { data, error } = await sb.storage.from('comprovantes').createSignedUrl(arquivo, 3600);
+    if (error) throw error;
+    window.open(data.signedUrl, '_blank', 'noopener');
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
 // ------------------------------------------------------------------ página de cobranças
 export async function renderCobrancas(el, { navegar }) {
   let aba = 'pendentes';
@@ -399,7 +583,7 @@ export async function renderCobrancas(el, { navegar }) {
   el.innerHTML = `
     <div class="pagina-topo">
       <div><h1>Cobranças</h1><p class="sub">Mensalidades, semestralidades, anuidades e diárias.</p></div>
-      <div class="acoes-linha no-print"><button class="btn" type="button" id="lancar-diaria">＋ Lançar diária</button><button class="btn" type="button" id="lancar-mensalidade">＋ Lançar mensalidade</button></div>
+      <div class="acoes-linha no-print"><button class="btn" type="button" id="lancar-diaria">＋ Lançar diária</button><button class="btn" type="button" id="lancar-mensalidade">＋ Lançar mensal</button><button class="btn" type="button" id="lancar-semestral">＋ Lançar semestral</button><button class="btn" type="button" id="lancar-anual">＋ Lançar anual</button></div>
     </div>
     <div id="kpis"></div>
     <div class="filtros">
@@ -419,10 +603,13 @@ export async function renderCobrancas(el, { navegar }) {
     else el.querySelector('[data-aba="diarias"]').click();
   });
 
-  el.querySelector('#lancar-mensalidade').onclick = () => lancarMensalidade(() => {
+  const irParaPagas = () => {
     if (aba === 'pagas') carregar();
     else el.querySelector('[data-aba="pagas"]').click();
-  });
+  };
+  el.querySelector('#lancar-mensalidade').onclick = () => lancarMensalidade(irParaPagas);
+  el.querySelector('#lancar-semestral').onclick = () => lancarPlano('semestral', irParaPagas);
+  el.querySelector('#lancar-anual').onclick = () => lancarPlano('anual', irParaPagas);
 
   async function carregar() {
     lista.innerHTML = carregando();
@@ -431,7 +618,10 @@ export async function renderCobrancas(el, { navegar }) {
     try {
       const hoje = hojeISO();
       const base = sb.from('pagamentos').select('*, alunos(id,nome,ativo,telefone,participante_proprio,participante_nome), matriculas(aulas(nome))');
-      if (aba === 'pagas') dados = ok(await base.eq('status', 'pago').order('pago_em', { ascending: false }).limit(200));
+      if (aba === 'pagas') {
+        dados = ok(await sb.from('pagamentos').select('*, alunos(id,nome,ativo,telefone,participante_proprio,participante_nome), matriculas(aulas(nome)), comprovantes(id,arquivo)')
+          .eq('status', 'pago').order('pago_em', { ascending: false }).limit(200));
+      }
       else dados = ok(await base.eq('status', 'pendente').order('vencimento'));
       if (aba === 'atrasadas') dados = dados.filter((p) => p.vencimento < hoje);
       if (aba !== 'pagas') desenharKpis(dados, aba, hoje);
@@ -488,7 +678,7 @@ export async function renderCobrancas(el, { navegar }) {
   function desenharLista() {
     if (aba === 'diarias') return desenharDiarias();
     const q = busca.trim().toLowerCase();
-    const filtrados = dados.filter((p) => !q || (p.alunos?.nome || '').toLowerCase().includes(q));
+    const filtrados = dados.filter((p) => !q || `${p.alunos?.nome || ''} ${p.alunos?.participante_nome || ''}`.toLowerCase().includes(q));
     if (!filtrados.length) {
       lista.innerHTML = vazio(aba === 'pagas' ? 'Nenhum pagamento registrado.' : aba === 'atrasadas' ? 'Nenhuma cobrança em atraso. 🎉' : 'Nenhuma cobrança pendente.');
       return;
@@ -501,16 +691,16 @@ export async function renderCobrancas(el, { navegar }) {
         const atraso = p.status === 'pendente' && p.vencimento < hoje;
         const dias = atraso ? diasEntre(p.vencimento, hoje) : 0;
         return `<tr>
-          <td><a href="#/alunos/${p.alunos?.id}">${esc(p.alunos?.nome)}</a>${p.alunos?.ativo === false ? ' <span class="badge cinza">Desativado</span>' : ''}</td>
+          <td><a href="#/alunos/${p.alunos?.id}">${esc(p.alunos ? nomeParticipante(p.alunos) : '')}</a>${p.alunos && nomeParticipante(p.alunos) !== p.alunos.nome ? `<br><small class="sub">resp.: ${esc(p.alunos.nome)}</small>` : ''}${p.alunos?.ativo === false ? ' <span class="badge cinza">Desativado</span>' : ''}</td>
           <td>${esc(p.matriculas?.aulas?.nome)}</td>
           <td>${esc(planoLabel(p.plano))}</td>
           <td>${fmtMes(p.competencia)}</td>
           <td class="num">${money(p.valor)}</td>
           <td>${fmtDate(aba === 'pagas' ? p.pago_em : p.vencimento)}</td>
-          <td>${aba === 'pagas' ? esc(p.forma || '—')
+          <td>${aba === 'pagas' ? `${esc(p.forma || '—')}${p.parcelas > 1 ? ` <span class="badge info">${p.parcelas}x</span>` : ''}`
             : atraso ? `<span class="badge erro">${dias} dia(s) de atraso</span>`
             : p.vencimento === hoje ? '<span class="badge alerta">Vence hoje</span>' : '<span class="badge">A vencer</span>'}</td>
-          <td class="num acoes-cobranca">${(() => { const z = p.status === 'pendente' && linkCobrancaWhatsApp({ valor: p.valor, vencimento: p.vencimento, aula: p.matriculas?.aulas?.nome }, p.alunos); return z ? `<a class="btn pequeno whats" href="${esc(z)}" target="_blank" rel="noopener" title="Enviar a cobrança pelo WhatsApp">${ICONE_WHATSAPP}Cobrar</a> ` : ''; })()}${p.status === 'pendente' ? `<button class="btn pequeno" type="button" data-pagar="${p.id}">Registrar pagamento</button>` : ''}</td>
+          <td class="num acoes-cobranca">${(() => { const z = p.status === 'pendente' && linkCobrancaWhatsApp({ valor: p.valor, vencimento: p.vencimento, aula: p.matriculas?.aulas?.nome }, p.alunos); return z ? `<a class="btn pequeno whats" href="${esc(z)}" target="_blank" rel="noopener" title="Enviar a cobrança pelo WhatsApp">${ICONE_WHATSAPP}Cobrar</a> ` : ''; })()}${p.status === 'pendente' ? `<button class="btn pequeno" type="button" data-pagar="${p.id}">Registrar pagamento</button>` : ''}${p.status === 'pago' ? `${(p.comprovantes || []).map((c, i) => `<button class="btn sec pequeno btn-comp" type="button" data-ver-comp="${esc(c.arquivo)}" title="Ver comprovante">📎 Ver${p.comprovantes.length > 1 ? ` ${i + 1}` : ''}</button> `).join('')}<button class="btn sec pequeno btn-comp btn-mais" type="button" data-anexar="${p.id}" title="Adicionar comprovante (imagem)" aria-label="Adicionar comprovante">+</button>` : ''}</td>
         </tr>`;
       }).join('')}</tbody></table></div>`;
   }
@@ -535,6 +725,10 @@ export async function renderCobrancas(el, { navegar }) {
       });
       return;
     }
+    const ver = e.target.closest('[data-ver-comp]');
+    if (ver) return verComprovante(ver.dataset.verComp);
+    const anexar = e.target.closest('[data-anexar]');
+    if (anexar) return anexarComprovante(dados.find((x) => x.id === anexar.dataset.anexar), carregar);
     const b = e.target.closest('[data-pagar]');
     if (!b) return;
     const p = dados.find((x) => x.id === b.dataset.pagar);
