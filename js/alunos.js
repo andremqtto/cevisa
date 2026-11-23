@@ -50,7 +50,9 @@ export async function renderAlunos(el, { navegar }) {
   } catch (e) { el.innerHTML = erroBox(e); return; }
 
   let busca = '';
-  let filtro = 'todos';
+  let filtro = 'matriculados';
+  // matriculado = inscrito em alguma modalidade (ativa ou na lista de espera)
+  const matriculado = (a) => a.matriculas.some((m) => m.status === 'ativa' || m.status === 'espera');
 
   el.innerHTML = `
     <div class="pagina-topo">
@@ -63,7 +65,9 @@ export async function renderAlunos(el, { navegar }) {
     <div class="filtros">
       <input type="text" id="busca" placeholder="Buscar por aluno, responsável ou telefone…" aria-label="Buscar aluno">
       <select id="filtro" aria-label="Filtrar">
-        <option value="todos">Todos</option>
+        <option value="matriculados">Matriculados</option>
+        <option value="todos">Todos (inclusive sem matrícula)</option>
+        <option value="sem">Sem matrícula</option>
         <option value="ativos">Ativos</option>
         <option value="inativos">Desativados</option>
         <option value="vencidos">Plano vencido / vencendo</option>
@@ -79,6 +83,8 @@ export async function renderAlunos(el, { navegar }) {
     const arr = alunos.filter((a) => {
       if (q && !(a.nome.toLowerCase().includes(q) || nomeParticipante(a).toLowerCase().includes(q) ||(a.telefone || '').replace(/\D/g, '').includes(q.replace(/\D/g, '') || '§'))) return false;
       const s = situacao(a.matriculas);
+      if (filtro === 'matriculados') return matriculado(a);
+      if (filtro === 'sem') return !matriculado(a);
       if (filtro === 'ativos') return a.ativo;
       if (filtro === 'inativos') return !a.ativo;
       if (filtro === 'vencidos') return s.ordem <= 1;
@@ -86,7 +92,7 @@ export async function renderAlunos(el, { navegar }) {
       return true;
     });
     el.querySelector('#contagem').textContent = `${arr.length} de ${alunos.length} aluno(s)`;
-    if (!arr.length) { lista.innerHTML = vazio(alunos.length ? 'Nenhum aluno encontrado com esse filtro.' : 'Nenhum aluno cadastrado ainda. Clique em “Novo aluno”.'); return; }
+    if (!arr.length) { lista.innerHTML = vazio(alunos.length ? (filtro === 'matriculados' ? 'Nenhum aluno matriculado encontrado. Para ver também quem não tem matrícula, escolha “Todos”.' : 'Nenhum aluno encontrado com esse filtro.') : 'Nenhum aluno cadastrado ainda. Clique em “Novo aluno”.'); return; }
     lista.innerHTML = `<div class="tabela-wrap"><table>
       <thead><tr><th>Aluno</th><th>Aulas</th><th>Plano</th><th>Situação</th><th>Cadastro</th></tr></thead>
       <tbody>${arr.map((a) => {
