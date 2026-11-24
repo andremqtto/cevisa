@@ -752,3 +752,6 @@ fieldset.endereco { border: 1.5px solid var(--borda); border-radius: 12px; paddi
 fieldset.endereco legend { font-weight: 600; font-size: 14px; padding: 0 4px; }
 fieldset.endereco [data-cep-status].ok { color: var(--verde, #1a7f4b); }
 fieldset.endereco [data-cep-status].erro { color: var(--vermelho, #b42318); }
+
+/* descrição da aula: respeita as quebras de linha digitadas */
+.aula-descricao { white-space: pre-line; }

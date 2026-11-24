@@ -148,7 +148,7 @@ function cartao(a, ctx) {
       <div class="aula-foto">${foto}${isGestor && !a.ativa ? '<span class="selo">Oculta ao público</span>' : ''}</div>
       <div class="aula-corpo">
         <h2>${esc(a.nome)}</h2>
-        ${a.descricao ? `<p>${esc(a.descricao)}</p>` : ''}
+        ${a.descricao ? `<p class="aula-descricao">${esc(a.descricao)}</p>` : ''}
         ${a.idade_minima ? `<p class="sub" style="margin:0 0 8px"><strong>A partir de ${a.idade_minima} anos.</strong></p>` : ''}
         ${turmas.length ? turmasHTML(turmas, ctx) : horariosHTML(a.horarios)}
         <div class="precos">
