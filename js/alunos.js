@@ -24,7 +24,8 @@ function somaMeses(iso, n) {
 }
 
 /** Situação financeira resumida a partir das matrículas ativas. */
-function situacao(matriculas) {
+function situacao(matriculas, ativo = true) {
+  if (ativo === false) return { cls: 'cinza', txt: 'Desativado', ordem: 5 };
   const ativas = matriculas.filter((m) => m.status === 'ativa');
   if (!ativas.length) {
     return matriculas.some((m) => m.status === 'espera')
@@ -83,7 +84,7 @@ export async function renderAlunos(el, { navegar }) {
     const q = busca.trim().toLowerCase();
     const arr = alunos.filter((a) => {
       if (q && !(a.nome.toLowerCase().includes(q) || nomeParticipante(a).toLowerCase().includes(q) ||(a.telefone || '').replace(/\D/g, '').includes(q.replace(/\D/g, '') || '§'))) return false;
-      const s = situacao(a.matriculas);
+      const s = situacao(a.matriculas, a.ativo);
       if (filtro === 'matriculados') return matriculado(a);
       if (filtro === 'sem') return !matriculado(a);
       if (filtro === 'ativos') return a.ativo;
@@ -97,7 +98,7 @@ export async function renderAlunos(el, { navegar }) {
     lista.innerHTML = `<div class="tabela-wrap"><table>
       <thead><tr><th>Aluno</th><th>Aulas</th><th>Plano</th><th>Situação</th><th>Cadastro</th></tr></thead>
       <tbody>${arr.map((a) => {
-        const s = situacao(a.matriculas);
+        const s = situacao(a.matriculas, a.ativo);
         const vivas = a.matriculas.filter((m) => m.status !== 'encerrada');
         return `<tr class="clicavel" data-id="${a.id}" tabindex="0">
           <td><div class="com-avatar">${avatarHTML(a.foto, nomeParticipante(a), 40)}<div><strong>${esc(nomeParticipante(a))}</strong>${nomeParticipante(a) !== a.nome ? `<br><small class="sub">resp.: ${esc(a.nome)}</small>` : ''}${a.ativo ? '' : ' <span class="badge cinza">Desativado</span>'}${a.cadastro_completo === false ? ' <span class="badge alerta">Aguardando 1º acesso</span>' : ''}<br><small class="sub">${esc(a.telefone || '')}</small></div></div></td>
@@ -395,7 +396,7 @@ export async function renderFicha(el, id, { navegar }) {
   const recarregar = () => renderFicha(el, id, { navegar });
   const pedidosTranc = mats.flatMap((m) => (m.trancamento_pedidos || []).filter((p) => p.status === 'pendente').map((p) => ({ p, m })));
   const hoje = hojeISO();
-  const s = situacao(mats);
+  const s = situacao(mats, aluno.ativo);
   const dado = (rotulo, valor) => `<div><dt>${rotulo}</dt><dd>${valor ? esc(valor) : '—'}</dd></div>`;
   const matsVivas = mats.filter((m) => m.status !== 'encerrada');
   const matsEncerradas = mats.filter((m) => m.status === 'encerrada');
