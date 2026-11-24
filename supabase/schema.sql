@@ -284,6 +284,18 @@ create table if not exists public.diarias (
 );
 create index if not exists diarias_data_idx on public.diarias (data);
 
+-- Reembolsos: dinheiro que a empresa DEVOLVEU (saída). Aluno é opcional. Abatem do total recebido nos relatórios.
+create table if not exists public.reembolsos (
+  id         uuid primary key default gen_random_uuid(),
+  aluno_id   uuid references public.alunos(id) on delete set null,
+  valor      numeric(10,2) not null check (valor > 0),
+  data       date not null default current_date,
+  observacao text,
+  criado_por uuid default auth.uid() references auth.users(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create index if not exists reembolsos_data_idx on public.reembolsos (data);
+
 -- Comprovantes de pagamento enviados pelo aluno (arquivo no Storage, bucket "comprovantes").
 create table if not exists public.comprovantes (
   id            uuid primary key default gen_random_uuid(),
@@ -376,6 +388,10 @@ create policy diarias_gestor on public.diarias for all to authenticated using (p
 drop policy if exists comprovantes_gestor on public.comprovantes;
 create policy comprovantes_gestor on public.comprovantes for all to authenticated using (public.is_gestor()) with check (public.is_gestor());
 grant select, insert, update, delete on public.turmas, public.diarias to authenticated;
+alter table public.reembolsos enable row level security;
+drop policy if exists reembolsos_gestor on public.reembolsos;
+create policy reembolsos_gestor on public.reembolsos for all to authenticated using (public.is_gestor()) with check (public.is_gestor());
+grant select, insert, update, delete on public.reembolsos to authenticated;
 grant select, delete on public.comprovantes to authenticated;  -- o aluno envia pela função registrar_comprovante
 grant all on public.comprovantes, public.pagamentos, public.matriculas, public.aulas to service_role;
 
@@ -1076,6 +1092,14 @@ begin
                          'descricao', d.descricao) order by d.data, d.created_at)
                        from public.diarias d left join public.aulas au on au.id = d.aula_id
                        where d.data >= v_ini and d.data < v_fim), '[]'::jsonb),
+    -- reembolsos (saídas): abatem do total recebido
+    'reembolsos', coalesce((select sum(valor) from public.reembolsos where data >= v_ini and data < v_fim), 0),
+    'reembolsos_lista', coalesce((select jsonb_agg(jsonb_build_object(
+                         'id', r.id, 'data', r.data, 'aluno_id', r.aluno_id,
+                         'aluno', case when a.id is not null then public._participante(a) end,
+                         'valor', r.valor, 'observacao', r.observacao) order by r.data, r.created_at)
+                       from public.reembolsos r left join public.alunos a on a.id = r.aluno_id
+                       where r.data >= v_ini and r.data < v_fim), '[]'::jsonb),
     -- Mesmo relatório, separado por modalidade (aula)
     'modalidades', coalesce((select jsonb_agg(x order by x->>'ordem_', x->>'aula') from (
         select jsonb_build_object(

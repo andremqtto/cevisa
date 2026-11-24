@@ -11,7 +11,7 @@ export async function renderRelatorios(el) {
 
   el.innerHTML = `
     <div class="pagina-topo">
-      <div><h1>Relatório mensal</h1><p class="sub">Entradas, diárias, planos contratados e inadimplência do mês.</p></div>
+      <div><h1>Relatório mensal</h1><p class="sub">Entradas, diárias, reembolsos, planos contratados e inadimplência do mês.</p></div>
       <div class="acoes-linha no-print">
         <label class="campo" style="margin:0"><span class="sr" style="position:absolute;left:-9999px">Mês</span>
           <input type="month" id="mes" value="${mes}" aria-label="Mês do relatório"></label>
@@ -50,6 +50,8 @@ export async function renderRelatorios(el) {
     const debito = r.em_debito.reduce((s, d) => s + Number(d.valor), 0);
     const diarias = Number(r.diarias || 0);
     const listaDiarias = r.diarias_lista || [];
+    const reembolsos = Number(r.reembolsos || 0);
+    const listaReemb = r.reembolsos_lista || [];
     return `
       <div class="resumo">
         <div class="kpi"><span>Novos alunos</span><strong>${r.novos_alunos}</strong><small>cadastrados no mês</small></div>
@@ -57,7 +59,8 @@ export async function renderRelatorios(el) {
           <small>${r.planos.length ? r.planos.map((p) => `${p.qtd} ${planoLabel(p.plano).toLowerCase()}`).join(' · ') : 'nenhum no mês'}</small></div>
         <div class="kpi verde"><span>Mensalidades recebidas</span><strong>${money(r.recebido)}</strong><small>${r.recebimentos.length} pagamento(s) no mês${r.recebimentos.some((p) => p.parcelas > 1) ? ' · cartão parcelado conta 1 parcela por mês' : ''}</small></div>
         <div class="kpi verde"><span>Diárias recebidas</span><strong>${money(diarias)}</strong><small>${listaDiarias.length} diária(s) no mês</small></div>
-        <div class="kpi verde"><span>Total recebido</span><strong>${money(Number(r.recebido) + diarias)}</strong><small>mensalidades + diárias</small></div>
+        <div class="kpi vermelho"><span>Reembolsos</span><strong>− ${money(reembolsos)}</strong><small>${listaReemb.length} reembolso(s) no mês</small></div>
+        <div class="kpi verde"><span>Total recebido (líquido)</span><strong>${money(Number(r.recebido) + diarias - reembolsos)}</strong><small>mensalidades + diárias − reembolsos</small></div>
         <div class="kpi"><span>A receber</span><strong>${money(r.a_receber)}</strong><small>cobranças pendentes com vencimento no mês</small></div>
         <div class="kpi vermelho"><span>Em débito</span><strong>${money(debito)}</strong><small>${r.em_debito.length} aluno(s) com cobrança vencida no mês</small></div>
       </div>
@@ -96,6 +99,17 @@ export async function renderRelatorios(el) {
             <td>${esc(d.forma)}</td><td class="num">${money(d.valor)}</td></tr>`).join('')}</tbody>
           <tfoot><tr><td colspan="4"><strong>Total</strong></td><td class="num"><strong>${money(diarias)}</strong></td></tr></tfoot></table></div>`
           : vazio('Nenhuma diária lançada neste mês.')}
+      </section>
+
+      <section class="card">
+        <h2>Reembolsos no mês</h2>
+        ${listaReemb.length ? `<div class="tabela-wrap"><table>
+          <thead><tr><th>Data</th><th>Aluno</th><th>Observações</th><th class="num">Valor</th></tr></thead>
+          <tbody>${listaReemb.map((d) => `<tr>
+            <td>${fmtDate(d.data)}</td><td>${d.aluno_id ? `<a href="#/alunos/${d.aluno_id}">${esc(d.aluno)}</a>` : '—'}</td>
+            <td>${esc(d.observacao || '—')}</td><td class="num" style="color:var(--erro)">− ${money(d.valor)}</td></tr>`).join('')}</tbody>
+          <tfoot><tr><td colspan="3"><strong>Total</strong></td><td class="num" style="color:var(--erro)"><strong>− ${money(reembolsos)}</strong></td></tr></tfoot></table></div>`
+          : vazio('Nenhum reembolso neste mês.')}
       </section>`;
   }
 
@@ -104,6 +118,7 @@ export async function renderRelatorios(el) {
     // Todas as modalidades (aulas) aparecem, mesmo as que ainda não têm valores no mês.
     const mods = r.modalidades || [];
     const semMod = Number(r.diarias_sem_modalidade || 0);
+    const reemb = Number(r.reembolsos || 0);
     if (!mods.length && !semMod) return vazio('Nenhuma modalidade cadastrada. Crie as aulas na tela inicial.');
     const soma = (k) => mods.reduce((s, x) => s + Number(x[k] || 0), 0);
     const maior = Math.max(1, ...mods.map((x) => Number(x.recebido) + Number(x.diarias)));
@@ -135,10 +150,12 @@ export async function renderRelatorios(el) {
             <td class="num"><strong>${money(Number(x.recebido) + Number(x.diarias))}</strong></td>
             <td class="num">${money(x.a_receber)}</td><td class="num">${money(x.em_debito)}</td></tr>`).join('')}
             ${semMod ? `<tr><td><em>Diárias sem modalidade</em></td><td class="num">—</td><td class="num">—</td>
-              <td class="num">${money(semMod)}</td><td class="num"><strong>${money(semMod)}</strong></td><td class="num">—</td><td class="num">—</td></tr>` : ''}</tbody>
+              <td class="num">${money(semMod)}</td><td class="num"><strong>${money(semMod)}</strong></td><td class="num">—</td><td class="num">—</td></tr>` : ''}
+            ${reemb ? `<tr><td><em>Reembolsos (saídas)</em></td><td class="num">—</td><td class="num">—</td><td class="num">—</td>
+              <td class="num" style="color:var(--erro)"><strong>− ${money(reemb)}</strong></td><td class="num">—</td><td class="num">—</td></tr>` : ''}</tbody>
           <tfoot><tr><td><strong>Total</strong></td><td class="num"><strong>${soma('alunos_ativos')}</strong></td>
             <td class="num"><strong>${money(soma('recebido'))}</strong></td><td class="num"><strong>${money(soma('diarias') + semMod)}</strong></td>
-            <td class="num"><strong>${money(soma('recebido') + soma('diarias') + semMod)}</strong></td>
+            <td class="num"><strong>${money(soma('recebido') + soma('diarias') + semMod - reemb)}</strong></td>
             <td class="num"><strong>${money(soma('a_receber'))}</strong></td><td class="num"><strong>${money(soma('em_debito'))}</strong></td></tr></tfoot>
         </table></div>
       </section>`;

@@ -126,6 +126,83 @@ export async function lancarDiaria(aoConcluir) {
   });
 }
 
+// ------------------------------------------------------------------ lançar reembolso
+/** Reembolso = a empresa devolve dinheiro (saída). Aluno opcional; abate do total recebido nos relatórios. */
+export async function lancarReembolso(aoConcluir) {
+  const m = abrirModal({ titulo: 'Lançar reembolso', largura: 480, corpo: carregando() });
+  let alunos = [];
+  try {
+    alunos = ok(await sb.from('alunos').select('id,nome,participante_proprio,participante_nome').order('nome'));
+  } catch (e) { m.el.innerHTML = erroBox(e); return; }
+  const semAcento = (x) => (x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  let aluno = null;
+  m.el.innerHTML = `
+    <form id="f-reemb" novalidate>
+      <p class="sub" style="margin:0 0 12px">Valor que a empresa <strong>devolveu</strong>. Ele entra como saída e é descontado do total recebido nos relatórios.</p>
+      <label class="campo"><span>Aluno (opcional)</span>
+        <input type="search" name="busca" placeholder="Digite o nome do aluno…" autocomplete="off"></label>
+      <div id="re-resultados" class="lm-resultados"></div>
+      <div id="re-escolhido"></div>
+      <div class="grade2">
+        <label class="campo"><span>Valor do reembolso (R$) *</span>
+          <input type="number" name="valor" min="0.01" step="0.01" inputmode="decimal" required></label>
+        <label class="campo"><span>Data *</span>
+          <input type="date" name="data" required value="${hojeISO()}" max="${hojeISO()}"></label>
+      </div>
+      <label class="campo"><span>Observações</span>
+        <textarea name="obs" maxlength="500" rows="3" placeholder="Ex.: desistência antes do início das aulas, devolvido por Pix"></textarea></label>
+      <div id="re-erro"></div>
+      <div class="acoes">
+        <button class="btn sec" type="button" data-cancelar>Cancelar</button>
+        <button class="btn perigo" type="submit">Lançar reembolso</button>
+      </div>
+    </form>`;
+  const form = m.el.querySelector('#f-reemb');
+  const resultados = m.el.querySelector('#re-resultados');
+  const escolhido = m.el.querySelector('#re-escolhido');
+  const erro = (t) => { m.el.querySelector('#re-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
+  m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
+  const mostrarEscolhido = () => {
+    escolhido.innerHTML = aluno ? `<div class="aviso info" style="margin-top:0">Aluno: <strong>${esc(nomeParticipante(aluno))}</strong>${nomeParticipante(aluno) !== aluno.nome ? ` <small>(resp.: ${esc(aluno.nome)})</small>` : ''}
+      <button class="btn sec pequeno" type="button" data-tirar style="margin-left:8px">Remover</button></div>` : '';
+    escolhido.querySelector('[data-tirar]')?.addEventListener('click', () => { aluno = null; mostrarEscolhido(); });
+  };
+  form.busca.addEventListener('input', () => {
+    const q = semAcento(form.busca.value.trim());
+    if (!q) { resultados.innerHTML = ''; return; }
+    const achados = alunos.filter((a) => semAcento(`${a.nome} ${a.participante_nome || ''}`).includes(q)).slice(0, 8);
+    resultados.innerHTML = achados.length
+      ? achados.map((a) => `<button type="button" class="lm-item" data-aluno="${a.id}"><strong>${esc(nomeParticipante(a))}</strong>${nomeParticipante(a) !== a.nome ? ` <small>(resp.: ${esc(a.nome)})</small>` : ''}</button>`).join('')
+      : '<p class="sub" style="margin:4px 0 10px">Nenhum aluno encontrado.</p>';
+  });
+  resultados.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-aluno]');
+    if (!b) return;
+    aluno = alunos.find((a) => a.id === b.dataset.aluno);
+    form.busca.value = '';
+    resultados.innerHTML = '';
+    mostrarEscolhido();
+  });
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const valor = Number(form.valor.value);
+    if (form.valor.value === '' || !(valor > 0)) return erro('Informe o valor do reembolso.');
+    if (!form.data.value) return erro('Informe a data do reembolso.');
+    if (form.data.value > hojeISO()) return erro('A data do reembolso não pode ser no futuro.');
+    erro('');
+    await comBotao(form.querySelector('[type=submit]'), async () => {
+      try {
+        ok(await sb.from('reembolsos').insert({
+          valor, data: form.data.value, aluno_id: aluno?.id || null, observacao: form.obs.value.trim() || null,
+        }));
+        m.fechar();
+        toast(`Reembolso de ${money(valor)} lançado.`);
+        aoConcluir?.();
+      } catch (err) { erro(err.message); }
+    });
+  });
+}
+
 // ------------------------------------------------------------------ confirmar pagamento informado pelo aluno
 const PRECO_PLANO = { mensal: 'preco_mensal', semestral: 'preco_semestral', anual: 'preco_anual' };
 
@@ -583,7 +660,7 @@ export async function renderCobrancas(el, { navegar }) {
   el.innerHTML = `
     <div class="pagina-topo">
       <div><h1>Cobranças</h1><p class="sub">Mensalidades, semestralidades, anuidades e diárias.</p></div>
-      <div class="acoes-linha no-print"><button class="btn" type="button" id="lancar-diaria">＋ Lançar diária</button><button class="btn" type="button" id="lancar-mensalidade">＋ Lançar mensal</button><button class="btn" type="button" id="lancar-semestral">＋ Lançar semestral</button><button class="btn" type="button" id="lancar-anual">＋ Lançar anual</button></div>
+      <div class="acoes-linha no-print"><button class="btn" type="button" id="lancar-diaria">＋ Lançar diária</button><button class="btn" type="button" id="lancar-mensalidade">＋ Lançar mensal</button><button class="btn" type="button" id="lancar-semestral">＋ Lançar semestral</button><button class="btn" type="button" id="lancar-anual">＋ Lançar anual</button><button class="btn perigo" type="button" id="lancar-reembolso">＋ Lançar reembolso</button></div>
     </div>
     <div id="kpis"></div>
     <div class="filtros">
@@ -592,6 +669,7 @@ export async function renderCobrancas(el, { navegar }) {
         <button type="button" data-aba="atrasadas">Atrasadas</button>
         <button type="button" data-aba="pagas">Pagas</button>
         <button type="button" data-aba="diarias">Diárias</button>
+        <button type="button" data-aba="reembolsos">Reembolsos</button>
       </div>
       <input type="text" id="busca" placeholder="Buscar aluno…" aria-label="Buscar aluno">
     </div>
@@ -610,11 +688,16 @@ export async function renderCobrancas(el, { navegar }) {
   el.querySelector('#lancar-mensalidade').onclick = () => lancarMensalidade(irParaPagas);
   el.querySelector('#lancar-semestral').onclick = () => lancarPlano('semestral', irParaPagas);
   el.querySelector('#lancar-anual').onclick = () => lancarPlano('anual', irParaPagas);
+  el.querySelector('#lancar-reembolso').onclick = () => lancarReembolso(() => {
+    if (aba === 'reembolsos') carregar();
+    else el.querySelector('[data-aba="reembolsos"]').click();
+  });
 
   async function carregar() {
     lista.innerHTML = carregando();
-    el.querySelector('#busca').placeholder = aba === 'diarias' ? 'Buscar descrição ou modalidade…' : 'Buscar aluno…';
+    el.querySelector('#busca').placeholder = aba === 'diarias' ? 'Buscar descrição ou modalidade…' : aba === 'reembolsos' ? 'Buscar aluno ou observação…' : 'Buscar aluno…';
     if (aba === 'diarias') return carregarDiarias();
+    if (aba === 'reembolsos') return carregarReembolsos();
     try {
       const hoje = hojeISO();
       const base = sb.from('pagamentos').select('*, alunos(id,nome,ativo,telefone,participante_proprio,participante_nome), matriculas(aulas(nome))');
@@ -675,8 +758,39 @@ export async function renderCobrancas(el, { navegar }) {
         <td class="num"><button class="btn sec perigo pequeno" type="button" data-excluir-diaria="${d.id}">Excluir</button></td></tr>`).join('')}</tbody></table></div>`;
   }
 
+  async function carregarReembolsos() {
+    try {
+      dados = ok(await sb.from('reembolsos').select('*, alunos(id,nome,participante_proprio,participante_nome)')
+        .order('data', { ascending: false }).order('created_at', { ascending: false }).limit(300));
+      const mes = hojeISO().slice(0, 7);
+      const doMes = dados.filter((d) => d.data.startsWith(mes));
+      el.querySelector('#kpis').innerHTML = `
+        <div class="resumo">
+          <div class="kpi vermelho"><span>Reembolsos no mês</span><strong>${money(doMes.reduce((s, d) => s + Number(d.valor), 0))}</strong><small>${doMes.length} reembolso(s) · descontados do total recebido</small></div>
+        </div>`;
+      desenharLista();
+    } catch (e) {
+      lista.innerHTML = erroBox(e);
+    }
+  }
+
+  function desenharReembolsos() {
+    const q = busca.trim().toLowerCase();
+    const filtrados = dados.filter((d) => !q || `${d.alunos?.nome || ''} ${d.alunos?.participante_nome || ''} ${d.observacao || ''}`.toLowerCase().includes(q));
+    if (!filtrados.length) { lista.innerHTML = vazio('Nenhum reembolso lançado. Use “Lançar reembolso”.'); return; }
+    lista.innerHTML = `<div class="tabela-wrap"><table>
+      <thead><tr><th>Data</th><th>Aluno</th><th>Observações</th><th class="num">Valor</th><th></th></tr></thead>
+      <tbody>${filtrados.map((d) => `<tr>
+        <td>${fmtDate(d.data)}</td>
+        <td>${d.alunos ? `<a href="#/alunos/${d.alunos.id}">${esc(nomeParticipante(d.alunos))}</a>` : '—'}</td>
+        <td>${esc(d.observacao || '—')}</td>
+        <td class="num" style="color:var(--erro)">− ${money(d.valor)}</td>
+        <td class="num"><button class="btn sec perigo pequeno" type="button" data-excluir-reembolso="${d.id}">Excluir</button></td></tr>`).join('')}</tbody></table></div>`;
+  }
+
   function desenharLista() {
     if (aba === 'diarias') return desenharDiarias();
+    if (aba === 'reembolsos') return desenharReembolsos();
     const q = busca.trim().toLowerCase();
     const filtrados = dados.filter((p) => !q || `${p.alunos?.nome || ''} ${p.alunos?.participante_nome || ''}`.toLowerCase().includes(q));
     if (!filtrados.length) {
@@ -721,6 +835,17 @@ export async function renderCobrancas(el, { navegar }) {
       await comBotao(ex, async () => {
         ok(await sb.from('diarias').delete().eq('id', d.id));
         toast('Diária excluída.');
+        carregar();
+      });
+      return;
+    }
+    const exr = e.target.closest('[data-excluir-reembolso]');
+    if (exr) {
+      const d = dados.find((x) => x.id === exr.dataset.excluirReembolso);
+      if (!(await confirmar(`Excluir o reembolso de ${money(d.valor)} lançado em ${fmtDate(d.data)}?`, { titulo: 'Excluir reembolso', confirmarTexto: 'Excluir', perigo: true }))) return;
+      await comBotao(exr, async () => {
+        ok(await sb.from('reembolsos').delete().eq('id', d.id));
+        toast('Reembolso excluído.');
         carregar();
       });
       return;
