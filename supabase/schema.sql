@@ -2144,3 +2144,88 @@ revoke all on function public.definir_endereco(uuid, text, text, text, text, tex
 grant execute on function public.definir_endereco(uuid, text, text, text, text, text, text, text) to authenticated;
 
 notify pgrst, 'reload schema';
+
+-- =====================================================================
+-- Professor: cadastro manual (aluno sem celular/e-mail) já com a inscrição numa aula DELE.
+-- A vaga fica como "Reserva de vaga" até a recepção registrar o pagamento (o professor não vê valores).
+-- =====================================================================
+create or replace function public.professor_cadastrar_aluno(
+  p_nome text, p_telefone text, p_nascimento date, p_cpf text, p_email text,
+  p_aula uuid, p_turma uuid, p_plano text, p_obs text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_nome text := left(regexp_replace(trim(coalesce(p_nome, '')), '\s+', ' ', 'g'), 120);
+  v_tel text := left(nullif(trim(p_telefone), ''), 20);
+  v_cpf text := nullif(regexp_replace(coalesce(p_cpf, ''), '\D', '', 'g'), '');
+  v_email text := lower(nullif(trim(p_email), ''));
+  v_aula text; v_turma text; v_prof text; v_id uuid; v_mat uuid; v_status text; v_vagas int; v_ocupadas int; v_pos int;
+begin
+  if not public.is_professor() then raise exception 'Acesso negado.'; end if;
+  if not exists (select 1 from public.professor_aulas where user_id = auth.uid() and aula_id = p_aula) then
+    raise exception 'Você só pode inscrever alunos nas suas modalidades.';
+  end if;
+  if position(' ' in v_nome) = 0 then
+    raise exception 'Informe o nome completo (nome e sobrenome).';
+  end if;
+  if length(regexp_replace(coalesce(v_tel, ''), '\D', '', 'g')) < 10 then raise exception 'Informe o telefone com DDD.'; end if;
+  if p_nascimento is null or p_nascimento > current_date then raise exception 'Informe a data de nascimento.'; end if;
+  if v_cpf is not null and length(v_cpf) <> 11 then raise exception 'CPF inválido: use 11 números.'; end if;
+  if v_email is not null and v_email !~ '^\S+@\S+\.\S+$' then raise exception 'E-mail inválido.'; end if;
+  if p_plano not in ('mensal','semestral','anual') then raise exception 'Plano inválido.'; end if;
+  -- evita ficha duplicada: a recepção inscreve quem já tem cadastro
+  if (v_cpf is not null and exists (select 1 from public.alunos where regexp_replace(coalesce(cpf, ''), '\D', '', 'g') = v_cpf))
+     or exists (select 1 from public.alunos a where lower(public._participante(a)) = lower(v_nome)
+                   and public._nascimento_participante(a) = p_nascimento) then
+    raise exception 'Este aluno já tem cadastro. Peça à recepção para inscrevê-lo, ou ele mesmo se inscreve pelo app.';
+  end if;
+
+  perform 1 from public.aulas where id = p_aula and ativa for update;
+  if not found then raise exception 'Aula não encontrada.'; end if;
+  select nome into v_aula from public.aulas where id = p_aula;
+  if exists (select 1 from public.turmas where aula_id = p_aula and ativa) then
+    if p_turma is null then raise exception 'Escolha a turma.'; end if;
+    select nome into v_turma from public.turmas where id = p_turma and aula_id = p_aula and ativa;
+    if not found then raise exception 'Turma não encontrada nesta aula.'; end if;
+  else
+    p_turma := null;
+  end if;
+
+  insert into public.alunos (nome, cpf, data_nascimento, telefone, email, observacoes, ativo, cadastro_completo, criado_por, vinculo)
+  values (v_nome, case when v_cpf is not null then substr(v_cpf,1,3)||'.'||substr(v_cpf,4,3)||'.'||substr(v_cpf,7,3)||'-'||substr(v_cpf,10,2) end,
+          p_nascimento, v_tel, v_email, left(nullif(trim(p_obs), ''), 800), true, true, auth.uid(), 'externo')
+  returning id into v_id;
+  perform public._checar_idade(v_id, p_aula);
+
+  v_vagas := coalesce(public._vagas_grupo(p_aula, p_turma), 0);
+  select count(*) into v_ocupadas from public.matriculas
+   where aula_id = p_aula and turma_id is not distinct from p_turma and status = 'ativa';
+  if v_ocupadas < v_vagas and not exists (select 1 from public.matriculas
+       where aula_id = p_aula and turma_id is not distinct from p_turma and status = 'espera') then
+    v_status := 'ativa';
+  else
+    v_status := 'espera';
+  end if;
+  insert into public.matriculas (aluno_id, aula_id, turma_id, plano, status, data_inicio, data_fim)
+  values (v_id, p_aula, p_turma, p_plano, v_status, current_date, current_date)
+  returning id into v_mat;
+  if v_status = 'ativa' then
+    perform public._criar_cobranca(v_mat);
+  else
+    select count(*) into v_pos from public.matriculas
+     where aula_id = p_aula and turma_id is not distinct from p_turma and status = 'espera'
+       and (created_at, id) <= (select created_at, id from public.matriculas where id = v_mat);
+  end if;
+
+  select coalesce(nome, 'Professor(a)') into v_prof from public.gestores where user_id = auth.uid();
+  insert into public.notificacoes (tipo, aluno_id, matricula_id, referencia, mensagem)
+  values ('inscricao_solicitada', v_id, v_mat, current_date,
+          coalesce(v_prof, 'Professor(a)') || ' cadastrou ' || v_nome || ' (sem acesso ao app) e '
+          || case when v_status = 'ativa' then 'reservou vaga em ' else 'colocou na lista de espera de ' end
+          || v_aula || coalesce(' — ' || v_turma, '') || ' (plano ' || p_plano || ').'
+          || case when v_status = 'ativa' then ' Registre o pagamento para confirmar a inscrição.' else '' end);
+  return jsonb_build_object('aluno_id', v_id, 'matricula_id', v_mat, 'status', v_status, 'posicao_espera', v_pos);
+end $$;
+revoke all on function public.professor_cadastrar_aluno(text, text, date, text, text, uuid, uuid, text, text) from public, anon;
+grant execute on function public.professor_cadastrar_aluno(text, text, date, text, text, uuid, uuid, text, text) to authenticated;
+
+notify pgrst, 'reload schema';

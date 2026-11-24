@@ -2,7 +2,7 @@
 // O professor não vê valores, pagamentos nem as fichas completas.
 import { sb, ok } from './supabase.js';
 import { avatarHTML, ativarFotos } from './fotos.js';
-import { esc, fmtDate, carregando, vazio, erroBox, horariosHTML, linkWhatsAppPara, ICONE_WHATSAPP } from './ui.js';
+import { esc, fmtDate, carregando, vazio, erroBox, horariosHTML, linkWhatsAppPara, ICONE_WHATSAPP, abrirModal, toast, comBotao, hojeISO, PLANOS } from './ui.js';
 
 const idade = (nasc) => {
   if (!nasc) return null;
@@ -45,7 +45,10 @@ export async function renderProfessor(el, { navegar }) {
 
   ativarFotos(el);
   el.querySelector('#qr').onclick = async () => (await import('./alunos.js')).abrirQrCode();
-  el.querySelector('#novo').onclick = async () => (await import('./alunos.js')).novoAluno(navegar, { professor: true, aoCriar: recarregar });
+  el.querySelector('#novo').onclick = async () => (await import('./alunos.js')).novoAluno(navegar, {
+    professor: true, aoCriar: recarregar,
+    aoManual: aulas.length ? () => inscreverManual(aulas, recarregar) : null,
+  });
   el.querySelector('#busca')?.addEventListener('input', (e) => {
     const q = e.target.value.trim().toLowerCase();
     el.querySelectorAll('.prof-aluno').forEach((li) => { li.hidden = !!q && !li.dataset.nome.includes(q); });
@@ -73,6 +76,76 @@ function cartaoAula(aula) {
         </div>`;
       }).join('')}
     </section>`;
+}
+
+// ------------------------------------------------------------------ cadastro manual + inscrição
+/** Aluno sem celular/e-mail: o professor cadastra os dados básicos e inscreve numa aula dele (reserva de vaga). */
+function inscreverManual(aulas, aoConcluir) {
+  const m = abrirModal({
+    titulo: 'Cadastrar e inscrever',
+    largura: 540,
+    corpo: `
+      <form id="f-manual" novalidate>
+        <p class="sub" style="margin-top:0">O aluno fica <strong>sem acesso ao app</strong>. A vaga fica reservada e a recepção confirma a inscrição quando registrar o pagamento.</p>
+        <label class="campo"><span>Nome completo de quem vai fazer as aulas *</span><input type="text" name="nome" maxlength="120" required></label>
+        <div class="grade2">
+          <label class="campo"><span>Telefone / WhatsApp *</span><input type="tel" name="telefone" maxlength="20" inputmode="tel" required><small>Do aluno ou do responsável.</small></label>
+          <label class="campo"><span>Data de nascimento *</span><input type="date" name="nasc" max="${hojeISO()}" required></label>
+          <label class="campo"><span>CPF</span><input type="text" name="cpf" maxlength="14" inputmode="numeric"></label>
+          <label class="campo"><span>E-mail</span><input type="email" name="email" maxlength="120" inputmode="email" autocapitalize="none"></label>
+        </div>
+        <label class="campo"><span>Aula *</span>
+          <select name="aula">${aulas.map((a) => `<option value="${a.id}">${esc(a.nome)}</option>`).join('')}</select></label>
+        <div id="pm-turma"></div>
+        <label class="campo"><span>Plano *</span>
+          <select name="plano">${Object.entries(PLANOS).map(([v, t]) => `<option value="${v}">${esc(t)}</option>`).join('')}</select></label>
+        <label class="campo"><span>Observações</span><textarea name="obs" maxlength="800" rows="2" placeholder="Ex.: responsável é a mãe, Maria"></textarea></label>
+        <div id="pm-erro"></div>
+        <div class="acoes">
+          <button class="btn sec" type="button" data-cancelar>Cancelar</button>
+          <button class="btn" type="submit">Cadastrar e inscrever</button>
+        </div>
+      </form>`,
+  });
+  const form = m.el.querySelector('#f-manual');
+  const erro = (t) => { m.el.querySelector('#pm-erro').innerHTML = t ? `<div class="aviso erro">${esc(t)}</div>` : ''; };
+  m.el.querySelector('[data-cancelar]').onclick = () => m.fechar();
+  const turmasHTML = () => {
+    const a = aulas.find((x) => x.id === form.aula.value);
+    m.el.querySelector('#pm-turma').innerHTML = a?.turmas?.length ? `
+      <label class="campo"><span>Turma *</span>
+        <select name="turma">${a.turmas.map((t) => {
+          const ocup = a.alunos.filter((x) => x.turma_id === t.id && x.status === 'ativa').length;
+          return `<option value="${t.id}">${esc(t.nome)} — ${ocup >= t.vagas ? 'cheia (lista de espera)' : `${t.vagas - ocup} vaga(s)`}</option>`;
+        }).join('')}</select></label>` : '';
+  };
+  form.aula.addEventListener('change', turmasHTML);
+  turmasHTML();
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const nome = form.nome.value.trim();
+    if (nome.split(/\s+/).length < 2) return erro('Informe o nome completo (nome e sobrenome).');
+    if (form.telefone.value.replace(/\D/g, '').length < 10) return erro('Informe o telefone com DDD.');
+    if (!form.nasc.value) return erro('Informe a data de nascimento.');
+    const email = form.email.value.trim();
+    if (email && !/^\S+@\S+\.\S+$/.test(email)) return erro('E-mail inválido.');
+    erro('');
+    await comBotao(form.querySelector('[type=submit]'), async () => {
+      try {
+        const r = ok(await sb.rpc('professor_cadastrar_aluno', {
+          p_nome: nome, p_telefone: form.telefone.value.trim(), p_nascimento: form.nasc.value,
+          p_cpf: form.cpf.value.trim() || null, p_email: email || null,
+          p_aula: form.aula.value, p_turma: form.turma?.value || null, p_plano: form.plano.value,
+          p_obs: form.obs.value.trim() || null,
+        }));
+        m.fechar();
+        toast(r.status === 'espera'
+          ? `${nome} cadastrado(a) e na lista de espera (posição ${r.posicao_espera}).`
+          : `${nome} cadastrado(a) com vaga reservada. A recepção confirma ao registrar o pagamento.`);
+        aoConcluir();
+      } catch (err) { erro(err.message); }
+    });
+  });
 }
 
 function linhaAluno(x) {

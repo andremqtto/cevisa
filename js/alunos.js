@@ -190,10 +190,10 @@ export async function abrirQrCode({ url = urlApp(), titulo = 'QR Code do app', t
 
 // ================================================================== NOVO ALUNO (link de cadastro)
 // A equipe envia o link; a própria pessoa cria e-mail e senha e preenche o cadastro (dados, vínculo, foto e termo).
-// professor: true → sem a opção de cadastro manual (o professor não acessa fichas).
+// professor: true → o cadastro manual é o do professor (aoManual): dados básicos + inscrição numa aula dele.
 const MSG_CADASTRO = 'Olá! \u{1F44B}\nPara se inscrever em uma das modalidades esportivas oferecidas pelo Spa Médico Adventista Cevisa, acesse o link abaixo e faça seu cadastro no aplicativo.';
 
-export function novoAluno(navegar, { professor = false } = {}) {
+export function novoAluno(navegar, { professor = false, aoManual = null } = {}) {
   const link = linkCadastro();
   const podeCompartilhar = typeof navigator.share === 'function';
   const m = abrirModal({
@@ -209,7 +209,7 @@ export function novoAluno(navegar, { professor = false } = {}) {
         <button class="btn sec" type="button" data-qr>Mostrar QR Code</button>
       </div>
       <div class="aviso info">Quando a pessoa terminar, o cadastro aparece na lista de alunos${professor ? '' : ' (e você pode inscrevê-la nas aulas pela ficha)'}. Ela também pode pedir a inscrição pelo app.</div>
-      ${professor ? '<p class="login-troca">Depois, a recepção faz a inscrição do aluno na aula e na turma.</p>'
+      ${professor ? `<p class="login-troca">Depois, a recepção faz a inscrição do aluno na aula e na turma.</p>${aoManual ? '<p class="login-troca">Aluno sem celular ou sem e-mail? <button type="button" class="link" data-manual>Cadastrar e inscrever manualmente</button></p>' : ''}`
         : '<p class="login-troca">Aluno sem celular ou sem e-mail? <button type="button" class="link" data-manual>Cadastrar manualmente (sem acesso ao app)</button></p>'}`,
   });
   m.el.querySelector('[data-copiar]').onclick = async () => {
@@ -222,7 +222,11 @@ export function novoAluno(navegar, { professor = false } = {}) {
     m.fechar();
     abrirQrCode({ url: link, titulo: 'QR Code do cadastro', texto: 'A pessoa aponta a câmera do celular para o código e faz o cadastro.', arquivo: 'qrcode-cadastro-cevisa.png', compartilhar: MSG_CADASTRO });
   };
-  m.el.querySelector('[data-manual]')?.addEventListener('click', () => { m.fechar(); editarAluno(null, (novo) => navegar(`#/alunos/${novo.id}`)); });
+  m.el.querySelector('[data-manual]')?.addEventListener('click', () => {
+    m.fechar();
+    if (professor) aoManual?.();
+    else editarAluno(null, (novo) => navegar(`#/alunos/${novo.id}`));
+  });
 }
 
 // ================================================================== EXCLUIR (permanente)
