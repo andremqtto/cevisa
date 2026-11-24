@@ -1109,7 +1109,7 @@ begin
           'novas_matriculas', (select count(*) from public.matriculas m where m.aula_id = au.id and m.status <> 'espera'
                                  and (m.created_at at time zone 'America/Sao_Paulo')::date >= v_ini
                                  and (m.created_at at time zone 'America/Sao_Paulo')::date <  v_fim),
-          -- cartão parcelado: cada parcela entra no mês em que cai (ver _entradas)
+          -- valor inteiro no mês do pagamento (ver _entradas)
           'recebido',  coalesce((select sum(e.valor) from public._entradas(v_ini, v_fim) e join public.matriculas m on m.id = e.matricula_id
                                   where m.aula_id = au.id), 0),
           'pagamentos', (select count(*) from public._entradas(v_ini, v_fim) e join public.matriculas m on m.id = e.matricula_id
@@ -1938,24 +1938,17 @@ grant execute on function public.definir_desconto(uuid, numeric, text) to authen
 alter table public.pagamentos add column if not exists parcelas integer not null default 1
   check (parcelas between 1 and 24);
 
--- Entradas de dinheiro no período: pagamento à vista entra inteiro na data do pagamento;
--- parcelado no cartão entra 1/N por mês (a 1ª parcela na data do pagamento, as demais nos meses seguintes).
--- Os centavos que sobram da divisão ficam na 1ª parcela.
+-- Entradas de dinheiro no período: o pagamento entra INTEIRO no mês em que foi pago
+-- (semestral/anual: o valor total do plano conta só no mês do pagamento, mesmo parcelado no cartão).
 create or replace function public._entradas(p_ini date, p_fim date)
 returns table (pagamento_id uuid, matricula_id uuid, aluno_id uuid, plano text, forma text, pago_em date,
                data date, parcela int, parcelas int, valor numeric, valor_total numeric)
 language sql stable security definer set search_path = public as $$
   select p.id, p.matricula_id, p.aluno_id, p.plano, p.forma, p.pago_em,
-         (p.pago_em + make_interval(months => k))::date, k + 1, p.parcelas,
-         case when k = 0 then p.valor - round(p.valor / p.parcelas, 2) * (p.parcelas - 1)
-              else round(p.valor / p.parcelas, 2) end,
-         p.valor
+         p.pago_em, 1, p.parcelas, p.valor, p.valor
     from public.pagamentos p
-    cross join lateral generate_series(0, p.parcelas - 1) k
    where p.status = 'pago' and p.pago_em is not null
-     and p.pago_em < p_fim
-     and (p.pago_em + make_interval(months => k))::date >= p_ini
-     and (p.pago_em + make_interval(months => k))::date <  p_fim;
+     and p.pago_em >= p_ini and p.pago_em < p_fim;
 $$;
 revoke all on function public._entradas(date, date) from public, anon, authenticated;
 

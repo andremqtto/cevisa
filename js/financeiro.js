@@ -478,7 +478,7 @@ export async function lancarMensalidade(aoConcluir) {
 // ------------------------------------------------------------------ lançar semestral / anual
 /**
  * Quita o próximo período (6 ou 12 meses) de um aluno do plano semestral/anual e registra
- * em quantas vezes foi dividido no cartão. No relatório, cada parcela entra no seu mês.
+ * em quantas vezes foi dividido no cartão. No relatório, o valor total entra no mês do pagamento.
  */
 export async function lancarPlano(plano, aoConcluir) {
   const nomePlano = planoLabel(plano).toLowerCase();
@@ -579,7 +579,7 @@ export async function lancarPlano(plano, aoConcluir) {
         </div>
         <label class="campo"><span>Data do pagamento</span>
           <input type="date" name="data" value="${hoje}" max="${hoje}"></label>
-        <small class="sub">No relatório, o valor entra dividido: uma parcela por mês a partir da data do pagamento.</small>`;
+        <small class="sub">No relatório, o valor total do plano entra no mês do pagamento.</small>`;
     }
     escolhido.innerHTML = html;
     btnOk.disabled = !mat;
